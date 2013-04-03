@@ -647,6 +647,25 @@ Object alloc_AndPattern(Object l, Object r) {
     b->data[1] = r;
     return o;
 }
+
+//--------------------------------------------
+
+Object Float64_Point(Object self, int nparts, int *argcv,
+        Object *args, int flags) {
+    if (nparts < 1 || (nparts >= 1 && argcv[0] < 1))
+        die("@ requires an argument");
+    Object other = args[0];
+    assertClass(other, Number);
+  Object params[2];
+  int partcv[1];
+  params[0] = self;
+  params[1] = other;
+  partcv[0] = 2;
+  return callmethodflags(prelude, "point", 1, partcv, params, CFLAG_SELF);
+}
+
+//--------------------------------------------
+
 Object LessThanPattern_match(Object self, int nparts, int *argcv, Object *argv,
         int flags) {
     struct UserObject *b = (struct UserObject *)self;
@@ -2125,6 +2144,7 @@ Object alloc_Float64(double num) {
         add_Method(Number, "&", &literal_and);
         add_Method(Number, "prefix<", &Float64_prefixLessThan);
         add_Method(Number, "prefix>", &Float64_prefixGreaterThan);
+        add_Method(Number, "@", &Float64_Point);
     }
     Object o = alloc_obj(sizeof(double) + sizeof(Object), Number);
     double *d = (double*)o->data;

@@ -24,6 +24,7 @@ typedef struct Method {
 #define MFLAG_DEF 8
 #define MFLAG_CONFIDENTIAL 16
 #define MFLAG_PRIVATE 32
+#define MFLAG_VAR 64
 
 #define OFLAG_USEROBJ 16
 #define OFLAG_MUTABLE 64

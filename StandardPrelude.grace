@@ -83,6 +83,7 @@ class BindingPattern.new(pat) {
     }
 }
 
+
 class WildcardPattern.new {
     method match(o) {
         SuccessfulMatch.new(done, [])
@@ -122,6 +123,7 @@ class OrPattern.new(p1, p2) {
     }
 }
 
+
 def _standardPrelude = self
 def BasicGrace = object {
     method new {
@@ -131,3 +133,19 @@ def BasicGrace = object {
 method new {
     _prelude.clone(self)
 }
+
+
+//KJX evil changes 
+
+class Point2D.new(x', y') { 
+     def x is readable = x'
+     def y is readable = y'
+     method asString {"({x}@{y})"}
+}
+
+method point(x,y) {
+ print "Making Point {x} {y}"
+ return Point2D.new(x,y)
+}
+
+

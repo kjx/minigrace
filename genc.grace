@@ -303,7 +303,7 @@ method compileobjvardecmeth(o, selfr, pos) {
     outprint("Object reader_{escmodname}_{inm}_{myc}"
         ++ "(Object self, int nparams, int *argcv, "
         ++ "Object* args, int flags) \{")
-    var rflags := "MFLAG_PRIVATE"
+    var rflags := "MFLAG_PRIVATE | MFLAG_VAR"
     var wflags := "MFLAG_PRIVATE"
     for (o.annotations) do {ann->
         if ((ann.kind == "identifier").andAlso {ann.value == "confidential"}) then {

@@ -50,6 +50,12 @@ Object MirrorMethod_name(Object self, int nparams, int *argcv, Object *argv,
     return alloc_String(s->method->name);
 }
 
+Object MirrorMethod_flags(Object self, int nparams, int *argcv, Object *argv,
+        int flags) {
+    struct MirrorMethodObject *s = (struct MirrorMethodObject*)self;
+    return alloc_Float64(s->method->flags);
+}
+
 Object MirrorMethod_partcount(Object self, int nparams, int *argcv,
         Object *argv, int flags) {
     struct MirrorMethodObject *s = (struct MirrorMethodObject*)self;
@@ -108,14 +114,49 @@ Object MirrorMethod_request(Object self, int nparts, int *argcv, Object *argv,
     return rv;
 }
 
+
+Object MirrorMethod_evil(Object self, int nparts, int *argcv, Object *argv,
+        int flags) {
+    struct MirrorMethodObject *s = (struct MirrorMethodObject*)self;
+    Object partsl = argv[0];
+    int cparts = integerfromAny(callmethod(partsl, "size", 0, NULL, NULL));
+    int i = 0;
+    int size = 0;
+    int cargcv[cparts];
+    Object partsiter = callmethod(partsl, "iter", 0, NULL, NULL);
+    while (istrue(callmethod(partsiter, "havemore", 0, NULL, NULL))) {
+        Object argsl = callmethod(partsiter, "next", 0, NULL, NULL);
+        cargcv[i] = integerfromAny(callmethod(argsl, "size", 0, NULL, NULL));
+        size += cargcv[i];
+        i++;
+    }
+    Object cargv[size];
+    i = 0;
+    partsiter = callmethod(partsl, "iter", 0, NULL, NULL);
+    while (istrue(callmethod(partsiter, "havemore", 0, NULL, NULL))) {
+        Object argsl = callmethod(partsiter, "next", 0, NULL, NULL);
+        Object argsiter = callmethod(argsl, "iter", 0, NULL, NULL);
+        while (istrue(callmethod(argsiter, "havemore", 0, NULL, NULL))) {
+            Object o = callmethod(argsiter, "next", 0, NULL, NULL);
+            cargv[i] = o;
+            i++;
+        }
+    }
+    Object rv = callmethodflags(s->obj, s->method->name, cparts, cargcv,
+				cargv, -1);  // -1 sets all flags?
+    return rv;
+}
+
 Object alloc_MirrorMethod(Method *method, Object obj) {
     if (MirrorMethodClass == NULL) {
-        MirrorMethodClass = alloc_class("MirrorMethod", 5);
+        MirrorMethodClass = alloc_class("MirrorMethod", 7);
         add_Method(MirrorMethodClass, "request", &MirrorMethod_request);
         add_Method(MirrorMethodClass, "name", &MirrorMethod_name);
         add_Method(MirrorMethodClass, "asString", &MirrorMethod_asString);
         add_Method(MirrorMethodClass, "partcount", &MirrorMethod_partcount);
         add_Method(MirrorMethodClass, "paramcounts", &MirrorMethod_paramcounts);
+        add_Method(MirrorMethodClass, "flags", &MirrorMethod_flags);
+        add_Method(MirrorMethodClass, "evil", &MirrorMethod_evil);
     }
     Object o = alloc_obj(sizeof(struct MirrorMethodObject)
             - sizeof(struct Object), MirrorMethodClass);

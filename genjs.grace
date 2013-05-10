@@ -28,6 +28,7 @@ var inBlock := false
 var compilationDepth := 0
 def staticmodules = mgcollections.set.new
 def topLevelTypes = mgcollections.map.new
+var dialectHasAtModuleEnd := false
 
 method out(s) {
     output.push(s)
@@ -539,12 +540,7 @@ method compiledefdec(o) {
         nm := escapestring(o.name.value)
     }
     declaredvars.push(nm)
-    var val := o.value
-    if (false != val) then {
-        val := compilenode(val)
-    } else {
-        util.syntax_error("const must have value bound.")
-    }
+    var val := compilenode(o.value)
     out("  var " ++ varf(nm) ++ " = " ++ val ++ ";")
     if (compilationDepth == 1) then {
         compilenode(ast.methodNode.new(o.name, [ast.signaturePart.new(o.name.value)],
@@ -964,7 +960,7 @@ method addTransitiveImports(filepath, epath) {
         def path = data.get("path").first
         if (path != epath) then {
             util.syntax_error("Imported module '{epath}' compiled with"
-                ++ " different path: uses {path}.")
+                ++ " different path '{path}'.")
         }
     }
 }
@@ -1011,15 +1007,18 @@ method processDialect(values') {
                         log_verbose("running dialect's checkers.")
                         dobj.checker(values')
                     }
+                    if (m.name == "atModuleEnd") then {
+                        dialectHasAtModuleEnd := true
+                    }
                 }
             } case { e : RuntimeError ->
                 util.setPosition(v.line, 1)
-                util.syntax_error("dialect '{nm}' failed to load: {e}")
+                util.syntax_error("Dialect '{nm}' failed to load: {e}.")
             } case { e : CheckerFailure ->
                 if (nothing != e.data) then {
                     util.setPosition(e.data.line, e.data.linePos)
                 }
-                util.syntax_error("dialect failure: {e.message}")
+                util.syntax_error("Dialect failure: {e.message}.")
             }
         }
     }
@@ -1051,17 +1050,28 @@ method compile(vl, of, mn, rm, bt, glpath) {
         out("var Grace_prelude = window.Grace_native_prelude;")
     }
     for (values) do { o ->
+        if (o.kind == "method") then {
+            compilenode(o)
+        }
+        if (o.kind == "type") then {
+            compilenode(o)
+            def typeid = escapeident(o.value)
+            out("var type_{typeid} = var_{typeid};")
+        }
+    }
+    for (values) do { o ->
         if (o.kind == "inherits") then {
             def sup = compilenode(o.value)
             out("  this.superobj = {sup};")
             out("  this.data = {sup}.data;")
             out("  this._value = {sup}._value;")
         }
-        compilenode(o)
-        if (o.kind == "type") then {
-            def typeid = escapeident(o.value)
-            out("var type_{typeid} = var_{typeid};")
+        if ((o.kind != "method") && (o.kind != "type")) then {
+            compilenode(o)
         }
+    }
+    if (dialectHasAtModuleEnd) then {
+        out("  callmethod(Grace_prelude,\"atModuleEnd\", [1], this);")
     }
     out("  return this;")
     out("\}")

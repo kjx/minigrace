@@ -48,15 +48,47 @@ var samples = {
         'dir': 'dialects',
         'requires': ['grapl'],
     },
+    'simplegraphics': {
+        'name': 'Simple graphics module',
+        'dir': 'js',
+        'requires': [],
+    },
+    'simplegraphics_example': {
+        'name': 'Simple graphics demo',
+        'dir': 'graphics',
+        'requires': ['simplegraphics'],
+    },
+    'turtle': {
+        'name': 'Turtle graphics module',
+        'dir': 'js',
+        'requires': [],
+    },
+    'logo': {
+        'name': 'Logo-like dialect',
+        'dir': 'graphics',
+        'requires': ['turtle'],
+    },
+    'logo_example': {
+        'name': 'Logo-like client code',
+        'dir': 'graphics',
+        'requires': ['turtle', 'logo'],
+    },
+    'pong': {
+        'name': 'DOM Pong',
+        'dir': 'js',
+        'requires': [],
+    },
 };
 
-var sm = document.getElementById('sample');
-for (var s in samples) {
-    var opt = document.createElement('option');
-    opt.value = s;
-    opt.innerHTML = samples[s].name;
-    sm.appendChild(opt);
-}
+window.onload = function() {
+    var sm = document.getElementById('sample');
+    for (var s in samples) {
+        var opt = document.createElement('option');
+        opt.value = s;
+        opt.innerHTML = samples[s].name;
+        sm.appendChild(opt);
+    }
+};
 
 function loadSampleJS(k) {
     if (window[k])
@@ -97,7 +129,7 @@ function loadsample(k) {
     req.send(null);
     if (req.status == 200) {
         if (ace)
-            editor.setValue(req.responseText);
+            editor.setValue(req.responseText, -1);
         document.getElementById("code_txt").value = req.responseText;
         document.getElementById('modname').value = k;
     }

@@ -46,6 +46,7 @@ def topLevelTypes = collections.map.new
 var importHook := false
 var subprocesses := collections.list.new
 var linkfiles := collections.list.new
+var dialectHasAtModuleEnd := false
 
 method out(s) {
     output.push(s)
@@ -1002,12 +1003,7 @@ method compiledefdec(o) {
         nm := escapeident(o.name.value)
     }
     declaredvars.push(nm)
-    var val := o.value
-    if (false != val) then {
-        val := compilenode(val)
-    } else {
-        util.syntax_error("const must have value bound.")
-    }
+    var val := compilenode(o.value)
     out("  *var_{nm} = {val};")
     out("  if ({val} == undefined)")
     out("    callmethod(none, \"assignment\", 0, NULL, NULL);")
@@ -1581,7 +1577,7 @@ method addTransitiveImports(filepath, epath) {
         def path = data.get("path").first
         if (path != epath) then {
             util.syntax_error("Imported module '{epath}' compiled with"
-                ++ " different path: uses {path}.")
+                ++ " different path '{path}'.")
         }
     }
 }
@@ -1695,7 +1691,7 @@ method checkimport(nm) {
         staticmodules.add(nm)
     }
     if (exists.not) then {
-        util.syntax_error("failed finding import of " ++ nm ++ ".")
+        util.syntax_error("Failed finding import of '{nm}'.")
     }
 }
 method processImports(values') {
@@ -1723,15 +1719,18 @@ method processImports(values') {
                             log_verbose("running dialect's checkers.")
                             dobj.checker(values')
                         }
+                        if (m.name == "atModuleEnd") then {
+                            dialectHasAtModuleEnd := true
+                        }
                     }
                 } case { e : RuntimeError ->
                     util.setPosition(v.line, 1)
-                    util.syntax_error("dialect '{nm}' failed to load: {e}")
+                    util.syntax_error("Dialect '{nm}' failed to load: {e}.")
                 } case { e : CheckerFailure ->
                     if (nothing != e.data) then {
                         util.setPosition(e.data.line, e.data.linePos)
                     }
-                    util.syntax_error("dialect failure: {e.message}")
+                    util.syntax_error("Dialect failure: {e.message}.")
                 }
             }
         }
@@ -1751,7 +1750,7 @@ method processImports(values') {
             }
         }
         if (imperrors.size > 0) then {
-            util.syntax_error("failed processing import of " ++ imperrors ++".")
+            util.syntax_error("Failed processing import of {imperrors}.")
         }
     }
 }
@@ -1885,6 +1884,11 @@ method compile(vl, of, mn, rm, bt) {
         if (o.kind == "method") then {
             compilenode(o)
         }
+        if (o.kind == "type") then {
+            compilenode(o)
+            def typeid = escapeident(o.value)
+            out("type_{typeid} = *var_{typeid};")
+        }
     }
     for (values) do { o ->
         if (o.kind == "inherits") then {
@@ -1892,13 +1896,15 @@ method compile(vl, of, mn, rm, bt) {
             out("  self = setsuperobj(self, {superobj});")
             out("  *selfslot = self;")
         }
-        if (o.kind != "method") then {
+        if ((o.kind != "method") && (o.kind != "type")) then {
             compilenode(o)
         }
-        if (o.kind == "type") then {
-            def typeid = escapeident(o.value)
-            out("type_{typeid} = *var_{typeid};")
-        }
+    }
+    if (dialectHasAtModuleEnd) then {
+        out("  partcv[0] = 1;")
+        out("  params[0] = self;")
+        out("  callmethodflags(prelude, \"atModuleEnd\", "
+            ++ "1, partcv, params, CFLAG_SELF);")
     }
     for (globals) do {e->
         outprint(e)

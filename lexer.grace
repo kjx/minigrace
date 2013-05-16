@@ -128,9 +128,10 @@ def LexerClass = object {
             def indent = indentLevel
             def linePos = startPosition
         }
-        class NumToken.new(v) {
+        class NumToken.new(v, b) {
             def kind = "num"
             def value = v
+            def base = b
             def line = lineNumber
             def indent = indentLevel
             def linePos = startPosition
@@ -275,14 +276,23 @@ def LexerClass = object {
                         tokens.push(tok)
                         done := true
                     } elseif (mode == "m") then {
-                        tok := NumToken.new(accum)
                         tok := makeNumToken(accum)
                         if (tokens.size > 1) then {
                             if (tokens.last.kind == "dot") then {
                                 tokens.pop
                                 if (tokens.last.kind == "num") then {
-                                    tok := tokens.pop
-                                    tok := NumToken.new(tok.value ++ "." ++ accum)
+                                    if (tokens.last.base == 10) then {
+                                        tok := tokens.pop
+                                        var decimal := makeNumToken(accum)
+                                        if(decimal.base == 10) then {
+                                            tok := NumToken.new(tok.value ++ "." ++ decimal.value, 10)
+                                        } else {
+                                            util.syntax_error("Fractional part of number must be in base 10.")
+                                        }
+                                    } else {
+                                        util.syntax_error("Numbers in base {tokens.last.base} " ++
+                                            "can only be integers.")
+                                    }
                                 } else {
                                     util.syntax_error("Found '.{accum}'" ++
                                         ", expected term.")
@@ -328,7 +338,6 @@ def LexerClass = object {
             def cLines = collections.list.new
             def lines = collections.list.new
             method fromBase(str, base) {
-                def digits = "0123456789abcdefghijklmnopqrstuvqxyz"
                 var val := 0
                 for (str) do {c->
                     def n = c.ord
@@ -336,6 +345,8 @@ def LexerClass = object {
                     var inc := 0
                     if ((n >= 48) && (n <= 57)) then {
                         inc := n - 48 // 0
+                    } elseif((n >= 65) && (n <= 90)) then {
+                        inc := n - 55 // 'A' - 10
                     } else {
                         inc := n - 87 // 'a' - 10
                     }
@@ -348,19 +359,24 @@ def LexerClass = object {
             }
             method makeNumToken(accum) {
                 var base := 10
+                var baseSet := false
                 var sofar := ""
                 for (accum) do {c->
-                    if (c == "x") then {
+                    if ((c == "x") && (!baseSet)) then {
                         base := sofar.asNumber
+                        baseSet := true
                         if (base == 0) then {
                             base := 16
+                        }
+                        if((base < 2) || (base > 36)) then {
+                            util.syntax_error("Invalid base: {base}.")
                         }
                         sofar := ""
                     } else {
                         sofar := sofar ++ c
                     }
                 }
-                NumToken.new(fromBase(sofar, base).asString)
+                NumToken.new(fromBase(sofar, base).asString, base)
             }
             // True if ov is a valid identifier character. Identifier
             // characters are Unicode letters, Unicode numbers, apostrophe,
@@ -481,7 +497,7 @@ def LexerClass = object {
                         if (ct && (mode != "i")) then {
                             newmode := "m"
                         }
-                        if ((ordval >= 97) && (ordval <=122) && (mode == "m")) then {
+                        if ((((ordval >= 97) && (ordval <=122)) || ((ordval >= 65) && (ordval <= 90)))  && (mode == "m")) then {
                             newmode := "m"
                         }
                         if ((mode == "i") && (c == "<")) then {

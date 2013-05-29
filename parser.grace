@@ -22,7 +22,13 @@ var defaultMethodVisibility := "public"
 
 // Global object containing the current token
 var sym
-var lastToken
+var lastToken := object {
+    var kind := "start"
+    var line := 1
+    var linePos := 0
+    var indent := 0
+    var value := ""
+}
 
 var comment := false
 
@@ -204,6 +210,16 @@ method doannotation {
     anns
 }
 
+method blank {
+    if (sym.line > (lastToken.line + 1)) then {
+        if (values.size > 0) then {
+            if (values.last.kind != "blank") then {
+                values.push(ast.blankNode.new)
+            }
+        }
+    }
+}
+
 method dotypeterm {
     if (accept("identifier")) then {
         pushidentifier
@@ -345,6 +361,7 @@ method block {
                     }
                 }
             } else {
+                checkUnexpectedTokenAfterStatement
                 body.push(values.pop)
             }
         }
@@ -795,7 +812,11 @@ method expressionrest {
                 expect("rparen")
                 next
             } else {
-                term
+                util.setPosition(lastToken.line, lastToken.linePos + 1)
+                if (!tokenOnSameLine) then {
+                    util.syntax_error "expected term after operator."
+                }
+                expectConsume {term} error "expected term after operator."
             }
 
             // Regardless of where the last value came from, it may have
@@ -1899,25 +1920,29 @@ method statement {
             indentFreePass := true
         }
     } else {
-        if (sym.line == lastToken.line) then {
-            if (sym.kind != "rbrace") then {
-                util.setPosition(sym.line, sym.linePos)
-                if ((values.size > 0).andAlso {
-                        (values.last.kind == "identifier").orElse {
-                            values.last.kind == "member"
-                        }.andAlso {
-                            sym.kind == "identifier"
-                        }
-                    }) then {
-                    util.syntax_error("Unexpected token after statement ended; "
-                        ++ "got {sym.kind}: '{sym.value}', expected "
-                        ++ "new line or semicolon. Did you mean "
-                        ++ "'{values.last.toGrace 0}({sym.value})'?")
-                } else {
-                    util.syntax_error("unexpected token after statement ended; "
-                        ++ "got {sym.kind}: '{sym.value}', expected "
-                        ++ "new line or semicolon.")
-                }
+        checkUnexpectedTokenAfterStatement
+    }
+}
+
+method checkUnexpectedTokenAfterStatement {
+    if (sym.line == lastToken.line) then {
+        if (sym.kind != "rbrace") then {
+            util.setPosition(sym.line, sym.linePos)
+            if ((values.size > 0).andAlso {
+                    (values.last.kind == "identifier").orElse {
+                        values.last.kind == "member"
+                    }.andAlso {
+                        sym.kind == "identifier"
+                    }
+                }) then {
+                util.syntax_error("Unexpected token after statement ended; "
+                    ++ "got {sym.kind}: '{sym.value}', expected "
+                    ++ "new line or semicolon. Did you mean "
+                    ++ "'{values.last.toGrace 0}({sym.value})'?")
+            } else {
+                util.syntax_error("unexpected token after statement ended; "
+                    ++ "got {sym.kind}: '{sym.value}', expected "
+                    ++ "new line or semicolon.")
             }
         }
     }
@@ -1964,8 +1989,11 @@ method parse(toks) {
     next
     var oldlength := tokens.size + 0
     while {tokens.size > 0} do {
+        blank
         methoddec
+        blank
         inheritsdec
+        blank
         statement
         if (tokens.size == oldlength) then {
             util.setPosition(sym.line, sym.linePos)

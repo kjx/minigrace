@@ -382,6 +382,18 @@ method resolveIdentifiersActual(node) {
             }
         }
     }
+    if (node.kind == "inherits") then {
+        if (node.value.kind == "call") then{
+            node.value.with.push(ast.callWithPart.new("object",
+                [ast.identifierNode.new("self", false)]))
+            def newmem = ast.memberNode.new(node.value.value.value
+                                                ++ "()object",
+                node.value.value.in
+            )
+            def newcall = ast.callNode.new(newmem, node.value.with)
+            return ast.inheritsNode.new(newcall)
+        }
+    }
     node
 }
 method resolveIdentifiers(topNode) {
@@ -625,6 +637,7 @@ method resolve(values) {
     builtinObj.add "readable" as "def"
     builtinObj.add "writable" as "def"
     builtinObj.add "public" as "def"
+    builtinObj.add "confidential" as "def"
     builtinObj.add "parent" as "def"
     builtinObj.add "prelude" as "def"
     builtinObj.add "_prelude" as "def"

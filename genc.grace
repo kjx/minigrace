@@ -379,6 +379,7 @@ method compileclass(o, includeConstant) {
     if (false != o.generics) then {
         newmeth.generics := o.generics
     }
+    newmeth.properties.put("fresh", true)
     var obody := [newmeth]
     var cobj := ast.objectNode.new(obody, false)
     if (includeConstant) then {
@@ -402,9 +403,20 @@ method compileobject(o, outerRef) {
     var numMethods := 0
     var pos := 1
     var superobj := false
+    out "  Object inheritingObject{myc} = inheritingObject;"
+    out "  if (isTailObject) \{"
+    out "    isTailObject = 0;"
+    out "    inheritingObject = NULL;"
+    out "  \}"
     for (o.value) do { e ->
         if (e.kind == "vardec") then {
             numMethods := numMethods + 1
+        }
+        if (e.kind == "method") then {
+            if (e.properties.contains "fresh") then {
+                numMethods := numMethods + 1
+                numFields := numFields + 1
+            }
         }
         numMethods := numMethods + 1
         numFields := numFields + 1
@@ -422,10 +434,6 @@ method compileobject(o, outerRef) {
         out("  {selfr}->class->name = \"{o.classname}\";")
         out("\}")
     }
-    if (o.superclass != false) then {
-        superobj := compilenode(o.superclass)
-        out("  setsuperobj({selfr}, {superobj});")
-    }
     compileobjouter(selfr, outerRef)
     out("  Object oldself{myc} = self;")
     out("  struct StackFrameObject *oldstackframe{myc} = stackframe;")
@@ -436,6 +444,13 @@ method compileobject(o, outerRef) {
     out("  selfslot = &stackframe->slots[0];")
     out("  *selfslot = self;")
     out("  setframeelementname(stackframe, 0, \"self\");")
+    out "  if (inheritingObject{myc}) \{"
+    out "    struct UserObject *inho{myc} = (struct UserObject *)inheritingObject{myc};"
+    out "    while (inho{myc}->super != GraceDefaultObject) inho{myc} = (struct UserObject *)inho{myc}->super;"
+    out "    inho{myc}->super = {selfr};"
+    out "    self = inheritingObject{myc};"
+    out "    *selfslot = self;"
+    out "  \}"
     for (o.value) do { e ->
         if (e.kind == "method") then {
             compilemethod(e, selfr, pos)
@@ -480,11 +495,11 @@ method compileobject(o, outerRef) {
             compileobjdefdecdata(e, selfr, pos)
         } elseif (e.kind == "class") then {
         } elseif (e.kind == "inherits") then {
+            // The return value is irrelevant with factory inheritance,
+            // but we save it as super for the sake of "inherits true".
             superobj := compilenode(e.value)
-            out("  self = setsuperobj({selfr}, {superobj});")
-            out("  {selfr} = self;")
-            out("  gc_frame_newslot(self);")
-            out("  *selfslot = self;")
+            out "  struct UserObject *{selfr}_uo = (struct UserObject *){selfr};"
+            out "  {selfr}_uo->super = {superobj};"
             pos := pos - 1
         } else {
             compilenode(e)
@@ -628,6 +643,7 @@ method compilemethod(o, selfobj, pos) {
     out("  setframeelementname(stackframe, 0, \"self\");")
     slot := slot + 1
     numslots := numslots + 1
+    out "  if (methodInheritingObject) curarg++;"
     if (o.generics.size > 0) then {
         out("// Start generics")
         for (o.generics) do {g->
@@ -637,7 +653,7 @@ method compilemethod(o, selfobj, pos) {
             slot := slot + 1
             numslots := numslots + 1
         }
-        out("  if (nparts == 1 + {o.signature.size}) \{")
+        out("  if (nparts == 1 + {o.signature.size} + (methodInheritingObject != NULL)) \{")
         out("    if (argcv[nparts-1] < {o.generics.size}) \{")
         out("      gracedie(\"insufficient generic parameters\");")
         out("    \}")
@@ -656,13 +672,23 @@ method compilemethod(o, selfobj, pos) {
     var ret := "none"
     numslots := numslots + countbindings(o.body)
     definebindings(o.body, slot)
+    var tailObj := false
     var tco := false
     if ((o.body.size > 0) && {o.body.last.kind == "call"}
         && {util.extensions.contains("TailCall")}) then {
         tco := o.body.pop
     }
+    if ((o.body.size > 0).andAlso {o.body.last.kind == "object"}) then {
+        tailObj := o.body.pop
+    }
     for (o.body) do { l ->
         ret := compilenode(l)
+    }
+    if (false != tailObj) then {
+        out "  isTailObject = 1;"
+        out "  inheritingObject = methodInheritingObject;"
+        compileobject(tailObj, "self")
+        ret := tailObj.register
     }
     if (false != tco) then {
         compilecall(tco, true)
@@ -723,6 +749,7 @@ method compilemethod(o, selfobj, pos) {
     out("  pushstackframe(stackframe, \"{escapestring2(name)}\");")
     out("  int frame = gc_frame_new();")
     out("  gc_frame_newslot((Object)stackframe);")
+    out "  Object methodInheritingObject = NULL;"
     for (o.signature.indices) do { partnr ->
         def part = o.signature[partnr]
         if (part.params.size > 0) then {
@@ -814,9 +841,102 @@ method compilemethod(o, selfobj, pos) {
     }
     out("  meth_{litname}->definitionModule = modulename;")
     out("  meth_{litname}->definitionLine = {o.line};")
+    if (o.properties.contains("fresh")) then {
+        compilefreshmethod(o, nm, body, closurevars, selfobj, pos, numslots,
+            oldout)
+    }
     inBlock := origInBlock
     paramsUsed := origParamsUsed
     partsUsed := origPartsUsed
+}
+// Compiles the "fresh" method version of a method, when applicable.
+// This method is given a different name ending in _object, with the final
+// parameter being the object into which to insert methods.
+method compilefreshmethod(o, nm, body, closurevars, selfobj, pos, numslots,
+        oldout) {
+    def myc = auto_count
+    auto_count := auto_count + 1
+    var litname := escapeident("meth_{modname}_{escapestring2(nm)}_object")
+    def name = escapestring2(o.value.value ++ "()object")
+    output := topOutput
+    if (closurevars.size > 0) then {
+        if (o.selfclosure) then {
+            out("Object {litname}(Object realself, int nparts, int *argcv, "
+                ++ "Object *args, int32_t flags) \{")
+            out("  struct UserObject *uo = (struct UserObject*)realself;")
+        } else {
+            out("Object {litname}(Object self, int nparts, int *argcv, Object *args, "
+                ++ "int32_t flags) \{")
+            out("  struct UserObject *uo = (struct UserObject*)self;")
+        }
+        out("  Object closure = getdatum((Object)uo, {pos}, (flags>>24)&0xff);")
+        out("  struct StackFrameObject *stackframe = alloc_StackFrame({numslots}, getclosureframe(closure));")
+        out("  pushclosure(closure);")
+    } else {
+        out("Object {litname}(Object self, int nparts, int *argcv, Object *args, "
+            ++ "int32_t flags) \{")
+        out("  struct StackFrameObject *stackframe = alloc_StackFrame({numslots}, NULL);")
+        out("  pushclosure(NULL);")
+    }
+    out("  pushstackframe(stackframe, \"{escapestring2(name)}\");")
+    out("  int frame = gc_frame_new();")
+    out("  gc_frame_newslot((Object)stackframe);")
+    var sumAccum := "0"
+    for (o.signature.indices) do { partnr ->
+        sumAccum := sumAccum ++ " + argcv[{partnr - 1}]"
+    }
+    out "  Object methodInheritingObject = args[{sumAccum}];"
+    for (o.signature.indices) do { partnr ->
+        def part = o.signature[partnr]
+        if (part.params.size > 0) then {
+            out("  if (nparts > 0 && argcv[{partnr - 1}] < {part.params.size})")
+            out("    gracedie(\"insufficient arguments to method\");")
+        }
+    }
+    out("  Object params[{paramsUsed}];")
+    out("  int partcv[{partsUsed}];")
+    var j := 0
+    for (closurevars) do { cv ->
+        if (cv == "self") then {
+            out("  Object self = *(getfromclosure(closure, {j}));")
+            out("  sourceObject = self;")
+        } else {
+            out("  Object *var_{cv} = getfromclosure(closure, {j});")
+        }
+        j := j + 1
+    }
+    for (body) do { l->
+        out(l)
+    }
+    output := oldout
+    var len := name.size + 1
+    if (selfobj == false) then {
+    } elseif (closurevars.size == 0) then {
+        out("  Method *meth_{litname} = addmethod2pos({selfobj}, \"{escapestring2(name)}\", &{litname}, {pos});")
+        compilemethodtypes(litname, o)
+    } else {
+        out("  block_savedest({selfobj});")
+        out("  Object closure" ++ myc ++ " = createclosure("
+            ++ closurevars.size ++ ", \"{escapestring2(name)}\");")
+        out("setclosureframe(closure{myc}, stackframe);")
+        for (closurevars) do { v ->
+            if (v == "self") then {
+                out("  addtoclosure(closure{myc}, selfslot);")
+                auto_count := auto_count + 1
+            } else {
+                out("  addtoclosure(closure{myc}, var_{v});")
+            }
+        }
+        var uo := "uo{myc}"
+        out("  Method *meth_{litname} = addmethod2pos({selfobj}, \"{escapestring2(name)}\", &{litname}, {pos});")
+    }
+    for (o.annotations) do {ann->
+        if ((ann.kind == "identifier") && {ann.value == "confidential"}) then {
+            out("  meth_{litname}->flags |= MFLAG_CONFIDENTIAL;");
+        }
+    }
+    out("  meth_{litname}->definitionModule = modulename;")
+    out("  meth_{litname}->definitionLine = {o.line};")
 }
 method compilemethodtypes(litname, o) {
     var argcv := "int argcv_{litname}[] = \{"
@@ -1755,7 +1875,7 @@ method processImports(values') {
     }
 }
 method compile(vl, of, mn, rm, bt) {
-    util.log_verbose "generating C code."
+    util.log_verbose "generating C code..."
     var argv := sys.argv
     var cmd
     values := vl
@@ -1765,6 +1885,9 @@ method compile(vl, of, mn, rm, bt) {
             nummethods := nummethods + 1
         } elseif (v.kind == "method") then {
             nummethods := nummethods + 1
+            if (v.properties.contains("fresh")) then {
+                nummethods := nummethods + 1
+            }
         }
     }
     outfile := of
@@ -1788,6 +1911,7 @@ method compile(vl, of, mn, rm, bt) {
     outprint("extern Object Block;")
     outprint("extern Object None;")
     outprint("extern Object Type;")
+    outprint("extern Object GraceDefaultObject;")
     outprint("extern Object sourceObject;")
     outprint("static Object type_String;")
     outprint("static Object type_Number;")
@@ -1798,6 +1922,8 @@ method compile(vl, of, mn, rm, bt) {
     outprint("static Object argv;")
     outprint("static Object emptyclosure;")
     outprint("static Object prelude;")
+    outprint("static int isTailObject = 0;")
+    outprint("static Object inheritingObject = NULL;")
     outprint("static const char modulename[] = \"{modname}\";");
     outprint("Object module_StandardPrelude_init();");
     outprint("static char *originalSourceLines[] = \{")

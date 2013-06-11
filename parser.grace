@@ -126,7 +126,8 @@ method expectConsume(ablock) {
     var sz := tokens.size
     ablock.apply
     if (tokens.size == sz) then {
-        util.syntax_error("Unable to consume token.")
+        util.setPosition(sym.line, sym.linePos)
+        util.syntax_error("Unable to consume token: {sym.kind}: '{sym.value}'.")
     }
 }
 // Expect block to consume at least one token, or report string error
@@ -134,6 +135,7 @@ method expectConsume(ablock)error(msg) {
     var sz := tokens.size
     ablock.apply
     if (tokens.size == sz) then {
+        util.setPosition(sym.line, sym.linePos)
         util.syntax_error("Unable to consume token: {msg}.")
     }
 }
@@ -199,11 +201,11 @@ method doannotation {
     next
     def anns = collections.list.new
     don'tTakeBlock := true
-    expression
+    expectConsume {expression}
     while {accept("comma")} do {
         anns.push(checkAnnotation(values.pop))
         next
-        expression
+        expectConsume {expression}
     }
     don'tTakeBlock := false
     anns.push(checkAnnotation(values.pop))
@@ -239,14 +241,14 @@ method dotyperef {
     var tp := false
     var op := false
     def unionTypes = []
-    dotypeterm
+    expectConsume {dotypeterm}
     overallType := values.pop
     while {acceptSameLine("op") && (sym.value == "|")} do {
         if (unionTypes.size == 0) then {
             unionTypes.push(overallType)
         }
         next
-        dotypeterm
+        expectConsume {dotypeterm}
         unionTypes.push(values.pop)
     }
     if (unionTypes.size > 0) then {
@@ -266,7 +268,7 @@ method dotyperef {
             intersectionTypes.push(overallType)
         }
         next
-        dotypeterm
+        expectConsume {dotypeterm}
         intersectionTypes.push(values.pop)
     }
     if (intersectionTypes.size > 0) then {
@@ -313,7 +315,7 @@ method block {
                     // patterns, where T may be "Pair(hd, tl)" or similar.
                     next
                     braceIsType := true
-                    expression
+                    expectConsume {expression}
                     braceIsType := false
                     ident1.dtype := values.pop
                 }
@@ -350,10 +352,12 @@ method block {
                         indentFreePass := true
                     }
                 }
-            } elseif (accept("bind")) then {
+            } elseif (((values.last.kind == "member")
+                || (values.last.kind == "identifier"))
+                && accept("bind")) then {
                 var lhs := values.pop
                 next
-                expression
+                expectConsume {expression}
                 var rhs := values.pop
                 body.push(ast.bindNode.new(lhs, rhs))
                 if (accept("semicolon")) then {
@@ -403,7 +407,7 @@ method doif {
     if (accept("identifier") && (sym.value == "if")) then {
         def btok = sym
         next
-        expression
+        expectConsume {expression}
         var cond := values.pop
         var body := []
 
@@ -429,7 +433,7 @@ method doif {
                     minIndentLevel := minInd
                 }
                 while {(accept("rbrace")).not} do {
-                    statement
+                    expectConsume {statement}
                     v := values.pop
                     body.push(v)
                 }
@@ -444,7 +448,7 @@ method doif {
                 // "elseifs", turning them into ifs inside the else.
                 statementToken := sym
                 next
-                expression
+                expectConsume {expression}
                 econd := values.pop
                 if ((accept("identifier") &&
                     (sym.value == "then")).not) then {
@@ -462,7 +466,7 @@ method doif {
                     minIndentLevel := minInd
                 }
                 while {(accept("rbrace")).not} do {
-                    statement
+                    expectConsume {statement}
                     v := values.pop
                     ebody.push(v)
                 }
@@ -488,7 +492,7 @@ method doif {
                         minIndentLevel := minInd
                     }
                     while {(accept("rbrace")).not} do {
-                        statement
+                        expectConsume {statement}
                         v := values.pop
                         curelse.push(v)
                     }
@@ -589,7 +593,7 @@ method catchcase {
             block
         } elseif (accept("lparen")) then {
             next
-            expression
+            expectConsume {expression}
             expect("rparen")
             next
         } else {
@@ -603,7 +607,7 @@ method catchcase {
             block
         } elseif (accept("lparen")) then {
             next
-            expression
+            expectConsume {expression}
             expect("rparen")
             next
         } else {
@@ -634,7 +638,7 @@ method matchcase {
             block
         } elseif (accept("lparen")) then {
             next
-            expression
+            expectConsume {expression}
             expect("rparen")
             next
         } else {
@@ -648,7 +652,7 @@ method matchcase {
             block
         } elseif (accept("lparen")) then {
             next
-            expression
+            expectConsume {expression}
             expect("rparen")
             next
         } else {
@@ -1352,6 +1356,7 @@ method doclass {
         var s := methodsignature(false)
         var csig := s.sig
         var constructorName := s.m
+        def anns = doannotation
         if (!accept("lbrace")) then {
             util.syntax_error("Class declaration without body.")
         }
@@ -1377,6 +1382,14 @@ method doclass {
         util.setline(btok.line)
         var o := ast.classNode.new(cname, csig, body, false, constructorName)
         o.generics := s.generics
+        if (false != anns) then {
+            o.annotations.extend(anns)
+        } else {
+            if (defaultMethodVisibility == "confidential") then {
+                o.annotations.push(ast.identifierNode.new("confidential",
+                    false))
+            }
+        }
         values.push(o)
         minIndentLevel := localMinIndentLevel
     }
@@ -1773,6 +1786,7 @@ method domethodtype {
         dtype := ast.identifierNode.new("Done", false)
     }
     var o := ast.methodTypeNode.new(meth.value, signature, dtype)
+    o.generics := m.generics
     values.push(o)
     if (accept("semicolon")) then {
         next
@@ -1902,19 +1916,22 @@ method statement {
             expression
         }
     } else {
-        expression
-        if (accept("bind")) then {
-            var dest := values.pop
-            next
-            expression
-            var val := values.pop
-            var o := ast.bindNode.new(dest, val)
-            if (dest.kind == "call") then {
-                if (dest.value.kind != "member") then {
-                    util.syntax_error("Assignment to method call.")
+        ifConsume {expression} then {
+            if (((values.last.kind == "identifier")
+                || (values.last.kind == "member"))
+                && accept("bind")) then {
+                var dest := values.pop
+                next
+                expectConsume {expression}
+                var val := values.pop
+                var o := ast.bindNode.new(dest, val)
+                if (dest.kind == "call") then {
+                    if (dest.value.kind != "member") then {
+                        util.syntax_error("Assignment to method call.")
+                    }
                 }
+                values.push(o)
             }
-            values.push(o)
         }
     }
     if (accept("eof")) then {

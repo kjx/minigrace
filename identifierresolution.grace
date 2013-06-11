@@ -409,6 +409,11 @@ method resolveIdentifiers(topNode) {
             classScope.add(node.constructor.value)
             classScope.bindAs(node.name.value)
             pushScope
+            if (false != node.generics) then {
+                for (node.generics) do {g->
+                    scope.add(g.value) as "def"
+                }
+            }
             for (node.signature) do {s->
                 for (s.params) do {p->
                     scope.add(p.value)as "def"
@@ -494,6 +499,9 @@ method resolveIdentifiers(topNode) {
         if (node.kind == "methodtype") then {
             scope.add(node.value)
             pushScope
+            for (node.generics) do {g->
+                scope.add(g.value) as "def"
+            }
             for (node.signature) do {s->
                 for (s.params) do {p->
                     scope.add(p.value)as "def"
@@ -508,6 +516,9 @@ method resolveIdentifiers(topNode) {
             pushScope
             scope.variety := "method"
             scope.name := node.value.value
+            for (node.generics) do {g->
+                scope.add(g.value) as "def"
+            }
             for (node.signature) do {s->
                 for (s.params) do {p->
                     scope.add(p.value)as "def"
@@ -623,10 +634,12 @@ method resolve(values) {
     preludeObj.add "for()do"
     preludeObj.add "while()do"
     preludeObj.add "print"
+    builtinObj.add "Object" as "def"
     builtinObj.add "Dynamic" as "def"
     builtinObj.add "String" as "def"
     builtinObj.add "Number" as "def"
     builtinObj.add "Boolean" as "def"
+    builtinObj.add "Block" as "def"
     builtinObj.add "Done" as "def"
     builtinObj.add "done" as "def"
     builtinObj.add "true" as "def"
@@ -638,6 +651,7 @@ method resolve(values) {
     builtinObj.add "writable" as "def"
     builtinObj.add "public" as "def"
     builtinObj.add "confidential" as "def"
+    builtinObj.add "override" as "def"
     builtinObj.add "parent" as "def"
     builtinObj.add "prelude" as "def"
     builtinObj.add "_prelude" as "def"

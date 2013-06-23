@@ -52,8 +52,8 @@ method next {
     } else {
         sym := object {
             var kind := "eof"
-            var line := linenum + 1
-            var linePos := 0
+            var line := lastToken.line
+            var linePos := util.lines[lastToken.line].size + 1
             var indent := 0
             var value := ""
         }
@@ -176,6 +176,7 @@ method pushidentifier {
     var o := ast.identifierNode.new(sym.value, false)
     if (o.value == "_") then {
         o.value := "__" ++ auto_count
+        o.wildcard := true
         auto_count := auto_count + 1
     }
     values.push(o)
@@ -353,7 +354,8 @@ method block {
                     }
                 }
             } elseif (((values.last.kind == "member")
-                || (values.last.kind == "identifier"))
+                || (values.last.kind == "identifier")
+                || (values.last.kind == "index"))
                 && accept("bind")) then {
                 var lhs := values.pop
                 next
@@ -556,6 +558,14 @@ method generic {
         next
         while {accept("identifier")} do {
             identifier
+            while {accept("dot")} do {
+                next
+                def memberIn = values.pop
+                expect "identifier"
+                identifier
+                def memberName = values.pop
+                values.push(ast.memberNode.new(memberName.value, memberIn))
+            }
             generic
             gens.push(values.pop)
             if (accept("comma")) then {
@@ -812,7 +822,7 @@ method expressionrest {
                 // be allowed in term above?
                 next
                 if (accept("rparen")) then {
-                    util.syntax_error("Empty () in expression (maybe empty interpolated \{\} block).")
+                    util.syntax_error("Empty () in expression.")
                 }
                 expression
                 expect("rparen")
@@ -1262,31 +1272,6 @@ method doobject {
         def localMinIndentLevel = minIndentLevel
         next
         var superclass := false
-        if (accept("identifier") && (sym.value == "extends")) then {
-            next
-            expect("identifier")
-            identifier
-            var nm := values.pop
-            if (accept("dot").not) then {
-                util.syntax_error("extends must have '.new' invocation on right.")
-            }
-            next
-            expect("identifier")
-            identifier
-            var mn := values.pop
-            var scargs := []
-            if (accept("lparen")) then {
-                next
-                while {accept("rparen").not} do {
-                    expectConsume {expression}
-                    var tmp := values.pop
-                    scargs.push(tmp)
-                }
-                next
-            }
-            superclass := ast.callNode.new(ast.memberNode.new(mn.value, nm),
-                [ast.callWithPart.new(mn.value, scargs)])
-        }
         expect("lbrace")
         values.push(object {
             var kind := "lbrace"
@@ -1829,6 +1814,7 @@ method dotype {
             gens := p.params
             p := p.value
         }
+        def anns = doannotation
         expect("op")
         if (sym.value != "=") then {
             util.syntax_error("Type declarations require '='.")
@@ -1844,6 +1830,9 @@ method dotype {
             next
             def t = ast.typeNode.new(p.value, methods)
             t.generics := gens
+            if (false != anns) then {
+                t.annotations.extend(anns)
+            }
             values.push(t)
         } else {
             dotyperef
@@ -1861,6 +1850,9 @@ method dotype {
                 nt.generics := gens
             } else {
                 nt := ast.typeNode.new(p.value, [])
+            }
+            if (false != anns) then {
+                nt.annotations.extend(anns)
             }
             values.push(nt)
         }
@@ -1918,18 +1910,14 @@ method statement {
     } else {
         ifConsume {expression} then {
             if (((values.last.kind == "identifier")
-                || (values.last.kind == "member"))
+                || (values.last.kind == "member")
+                || (values.last.kind == "index"))
                 && accept("bind")) then {
                 var dest := values.pop
                 next
                 expectConsume {expression}
                 var val := values.pop
                 var o := ast.bindNode.new(dest, val)
-                if (dest.kind == "call") then {
-                    if (dest.value.kind != "member") then {
-                        util.syntax_error("Assignment to method call.")
-                    }
-                }
                 values.push(o)
             }
         }
@@ -1999,8 +1987,8 @@ method parse(toks) {
     tokens := []
     tokens.push(object {
         var kind := "eof"
-        var line := linenum + 1
-        var linePos := 0
+        var line := toks.last.line
+        var linePos := util.lines[toks.last.line].size + 1
         var indent := 0
         var value := ""
     })
@@ -2021,7 +2009,7 @@ method parse(toks) {
         statement
         if (tokens.size == oldlength) then {
             util.setPosition(sym.line, sym.linePos)
-            util.syntax_error("No token consumed at top level. Have " 
+            util.syntax_error("No token consumed at top level. Have "
                 ++ "{sym.kind}: '{sym.value}', expected statement.")
         }
         oldlength := tokens.size + 0

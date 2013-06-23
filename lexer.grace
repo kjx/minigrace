@@ -191,11 +191,13 @@ def LexerClass = object {
             // the token corresponding to the previous accumulated data.
             // mode is the previous lexical mode (a string), and accum the
             // accumulated characters since that mode began. Modes are:
-            //   n        Whitespace       i   Identifier
-            //   "        Quoted string    x   Octets literal
-            //   m        Number           o   Any operator
-            //   c        Comment
-            //   ,.{}[] The corresponding literal character
+
+            //   n           Whitespace       i   Identifier
+            //   "           Quoted string    x   Octets literal
+            //   m           Number           o   Any operator
+            //   p           Pragma           d   Indentation
+            //   c           Comment
+            //   ,.{}()[]<>; The corresponding literal character
             //
             // There are three special cases for mode o. If accum is "->",
             // ":=", or "=", the corresponding special token is created.
@@ -276,28 +278,27 @@ def LexerClass = object {
                         tokens.push(tok)
                         done := true
                     } elseif (mode == "m") then {
-                        tok := makeNumToken(accum)
-                        if (tokens.size > 1) then {
-                            if (tokens.last.kind == "dot") then {
-                                tokens.pop
-                                if (tokens.last.kind == "num") then {
-                                    if (tokens.last.base == 10) then {
-                                        tok := tokens.pop
-                                        var decimal := makeNumToken(accum)
-                                        if(decimal.base == 10) then {
-                                            tok := NumToken.new(tok.value ++ "." ++ accum, 10)
-                                        } else {
-                                            util.syntax_error("Fractional part of number must be in base 10.")
-                                        }
+                        if ((tokens.size > 1).andAlso {tokens.last.kind == "dot"}) then {
+                            tokens.pop
+                            if (tokens.last.kind == "num") then {
+                                if (tokens.last.base == 10) then {
+                                    tok := tokens.pop
+                                    var decimal := makeNumToken(accum)
+                                    if(decimal.base == 10) then {
+                                        tok := NumToken.new(tok.value ++ "." ++ accum, 10)
                                     } else {
-                                        util.syntax_error("Numbers in base {tokens.last.base} " ++
-                                            "can only be integers.")
+                                        util.syntax_error("Fractional part of number must be in base 10.")
                                     }
                                 } else {
-                                    util.syntax_error("Found '.{accum}'" ++
-                                        ", expected term.")
+                                    util.syntax_error("Numbers in base {tokens.last.base} " ++
+                                        "can only be integers.")
                                 }
+                            } else {
+                                util.syntax_error("Found '.{accum}'" ++
+                                    ", expected term.")
                             }
+                        } else {
+                            tok := makeNumToken(accum)
                         }
                         tokens.push(tok)
                         done := true
@@ -335,8 +336,7 @@ def LexerClass = object {
                 }
                 startPosition := linePosition
             }
-            def cLines = collections.list.new
-            def lines = collections.list.new
+
             method fromBase(str, base) {
                 var val := 0
                 for (str) do {c->
@@ -376,6 +376,9 @@ def LexerClass = object {
                         sofar := sofar ++ c
                     }
                 }
+                if(sofar == "") then {
+                    util.syntax_error("Number required after base.")
+                }
                 NumToken.new(fromBase(sofar, base).asString, base)
             }
             // True if ov is a valid identifier character. Identifier
@@ -411,7 +414,37 @@ def LexerClass = object {
             // tokens.
             method lexfile(file) {
                 util.log_verbose("reading source.")
-                lexinput(file.read)
+                def lines = []
+                def cLines = []
+                var line := ""
+                var cLine := ""
+                var source := ""
+                for(file.read) do { c ->
+                    if((c == "\n") || (c == "\l")) then {
+                        lines.push(line)
+                        cLines.push(cLine)
+                        line := ""
+                        cLine := ""
+                    } elseif(c == "\r") then {
+                    } elseif(c == "\\") then {
+                        line := line ++ "\\"
+                        cLine := cLine ++ "\\\\"
+                    } elseif(c == "\"") then {
+                        line := line ++ "\""
+                        cLine := cLine ++ "\\\""
+                    } else {
+                        line := line ++ c
+                        cLine := cLine ++ c
+                    }
+                    source := source ++ c
+                }
+                if(line != "") then {
+                    lines.push(line)
+                    cLines.push(cLine)
+                }
+                util.lines := lines
+                util.cLines := cLines
+                lexinput(source)
             }
 
             method lexinput(input) {
@@ -429,12 +462,8 @@ def LexerClass = object {
                 var interpdepth := 0
                 var interpString := false
                 var atStart := true
-                var cline := ""
-                var lineStr := ""
                 linePosition := 0
                 util.log_verbose("lexing.")
-                util.lines := lines
-                util.cLines := cLines
                 for (input) do { c ->
                     linePosition := linePosition + 1
                     util.setPosition(lineNumber, linePosition)
@@ -444,8 +473,6 @@ def LexerClass = object {
                         (ordval != 8232)) || (ordval == 9)) then {
                         // Character is whitespace, but not an ASCII space or
                         // Unicode LINE SEPARATOR, or is a tab
-                        lineStr := lineStr ++ c
-                        lines.push(lineStr)
                         util.syntax_error("Illegal whitespace in input: "
                             ++ "U+{padl(ordval.inBase 16, 4, "0")} "
                             ++ "({ordval}), {unicode.name(c)}.")
@@ -454,8 +481,6 @@ def LexerClass = object {
                         && (ordval != 13)) then {
                         // Character is a control character other than
                         // carriage return or line feed.
-                        lineStr := lineStr ++ c
-                        lines.push(lineStr)
                         util.syntax_error("Illegal control character in "
                             ++ "input: U+{padl(ordval.inBase 16, 4, "0")} "
                             ++ "({ordval}), {unicode.name(c)}.")
@@ -518,8 +543,6 @@ def LexerClass = object {
                             newmode := c
                         }
                         if ((c == "#") && (mode != "p")) then {
-                            lineStr := lineStr ++ c
-                            lines.push(lineStr)
                             util.syntax_error("Illegal operator character in "
                                 ++ "input: U+{padl(ordval.inBase 16, 4, "0")} "
                                 ++ "({ordval}), {unicode.name(c)}.")
@@ -540,8 +563,6 @@ def LexerClass = object {
                             if ((unicode.isSeparator(ordval).not)
                                 && (ordval != 10) && (ordval != 13)
                                 && (ordval != 32)) then {
-                                lineStr := lineStr ++ c
-                                lines.push(lineStr)
                                 util.syntax_error("Unknown character in "
                                     ++ "input: #{ordval}"
                                     ++ " '{c}', {unicode.name(c)}")
@@ -582,6 +603,9 @@ def LexerClass = object {
                         // lexical mode - process the old one now.
                         modechange(tokens, mode, accum)
                         if ((newmode == "}") && (interpdepth > 0)) then {
+                            if (prev == "\{") then {
+                                util.syntax_error("Empty expression in interpolated block.")
+                            }
                             modechange(tokens, ")", ")")
                             modechange(tokens, "o", "++")
                             newmode := "\""
@@ -609,13 +633,9 @@ def LexerClass = object {
                     } elseif (instr) then {
                         if (c == "\n") then {
                             if (interpdepth > 0) then {
-                                lineStr := lineStr ++ c
-                                lines.push(lineStr)
                                 util.syntax_error("Runaway string "
                                     ++ "interpolation.")
                             } else {
-                                lineStr := lineStr ++ c
-                                lines.push(lineStr)
                                 util.syntax_error("Newlines not permitted "
                                     ++ "in string literals.")
                             }
@@ -670,7 +690,7 @@ def LexerClass = object {
                             codepoint := codepoint * 16
                             codepoint := codepoint + hexdecchar(c)
                             if (unichars == 0) then {
-                                // At the end of the sequence construct 
+                                // At the end of the sequence construct
                                 // the character in the unicode library.
                                 accum := accum ++ unicode.create(codepoint)
                             }
@@ -692,8 +712,6 @@ def LexerClass = object {
                         }
                     } elseif (inBackticks) then {
                         if (c == "\n") then {
-                            lineStr := lineStr ++ c
-                            lines.push(lineStr)
                             util.syntax_error("Newlines not permitted in"
                                 ++ " backtick identifiers.")
                         }
@@ -704,12 +722,6 @@ def LexerClass = object {
                         mode := "d"
                         newmode := "d"
                         accum := ""
-                        if (c != "\r") then {
-                            cLines.push(cline)
-                            cline := ""
-                            lines.push(lineStr)
-                            lineStr := ""
-                        }
                     } else {
                         accum := accum ++ c
                     }
@@ -728,25 +740,13 @@ def LexerClass = object {
                         linePosition := 0
                         startPosition := 1
                         util.setPosition(lineNumber, 0)
-                    } elseif (c == "\r") then {
-                    } else {
-                        if (c == "\"") then {
-                            cline := cline ++ "\\\""
-                        } else {
-                            if (c == "\\") then {
-                                cline := cline ++ "\\\\"
-                            } else {
-                                cline := cline ++ c
-                            }
-                        }
-                        lineStr := lineStr ++ c
                     }
                     prev := c
                 }
-                // If file doesn't end in newline, add last line to the collection of lines.
-                if ((prev != "\n") && (prev != "\r")) then {
-                    cLines.push(cline)
-                    lines.push(lineStr)
+                if ((mode == "\"") && instr) then {
+                    util.syntax_error("Unfinished string literal, expected '\"'.")
+                } elseif ((mode == "x") && instr) then {
+                    util.syntax_error("Unfinished octets literal, expected '\"'.")
                 }
                 modechange(tokens, mode, accum)
                 tokens

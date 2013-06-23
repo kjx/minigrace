@@ -18,7 +18,7 @@ import "mirrors" as mirrors
 util.parseargs
 
 def targets = ["lex", "parse", "grace", "processed-ast",
-    "imports", "c", "js", "grace"]
+    "imports", "c", "js"]
 
 if (util.target == "help") then {
     print("Valid targets:")
@@ -117,6 +117,6 @@ match(util.target)
         genjson.generate(values, util.outfile)
     }
     case { _ ->
-        io.error.write("minigrace: no such target '" ++ util.target ++ "'")
+        io.error.write("minigrace: no such target '" ++ util.target ++ "'\n")
         sys.exit(1)
     }

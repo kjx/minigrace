@@ -411,7 +411,7 @@ method compileclass(o, includeConstant) {
     if (includeConstant) then {
         var con := ast.defDecNode.new(o.name, cobj, false)
         if ((compilationDepth == 1) && {o.name.kind != "generic"}) then {
-            def meth = ast.methodNode.new(o.name, [ast.signaturePart.new(o.name)], [o.name], false)
+            def meth = ast.methodNode.new(o.name, [ast.signaturePart.new(o.name.value)], [o.name], false)
             compilenode(meth)
         }
         o.register := compilenode(con)
@@ -519,6 +519,7 @@ method compileobject(o, outerRef) {
     }
     pos := 1
     for (o.value) do { e ->
+        out "  sourceObject = {selfr};"
         if (e.kind == "method") then {
         } elseif (e.kind == "vardec") then {
             compileobjvardecdata(e, selfr, pos)
@@ -587,6 +588,11 @@ method compiletype(o) {
     o.register := "none"
     if (o.anonymous) then {
         o.register := "type{myc}"
+    }
+    if (compilationDepth == 1) then {
+        def idd = ast.identifierNode.new(o.value, false)
+        compilenode(ast.methodNode.new(idd, [ast.signaturePart.new(o.value)],
+            [idd], false))
     }
 }
 method compilefor(o) {
@@ -671,6 +677,12 @@ method compilemethod(o, selfobj, pos) {
             declaredvars.push(van)
             slot := slot + 1
             numslots := numslots + 1
+        } else {
+            if (!o.selfclosure) then {
+                // TODO currently blocks can have excess arguments
+                out "if (argcv && argcv[{partnr - 1}] > {part.params.size})"
+                out "  gracedie(\"too many arguments for {part.name}\");"
+            }
         }
     }
     out("  Object *selfslot = &(stackframe->slots[{slot}]);")

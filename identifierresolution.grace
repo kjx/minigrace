@@ -170,6 +170,9 @@ method rewritematchblockterm(arg) {
         == "prefix"}) then {
         return [arg, []]
     }
+    if (arg.kind == "member") then {
+        return [arg, []]
+    }
     if (arg.kind == "call") then {
         def bindings = []
         def subpats = []
@@ -236,6 +239,7 @@ method rewritematchblockterm(arg) {
     if (arg.kind == "type") then {
         return [arg, []]
     }
+    Error.raise "Compiler logic error: fell through when rewriting match block"
 }
 method rewritematchblock(blk) {
     def arg = blk.params[1]
@@ -358,6 +362,7 @@ method resolveIdentifiersActual(node) {
         if (node.value.kind == "call") then {
             def tmp = ast.callNode.new(node.value.value, node.with)
             tmp.line := node.line
+            tmp.generics := node.generics
             return tmp
         }
     }

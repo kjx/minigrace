@@ -29,6 +29,7 @@ class replClass.new {
 }
 
 class evalVisitor.new {
+    inherits ast.baseVisitor
     def ReturnException = Exception.refine "ReturnException"
 
     // Top-level interpreter object. Everything that is not in an explicit
@@ -917,12 +918,16 @@ method startRepl {
                 if (!io.input.isatty && (util.errno != 0)) then {
                     sys.exit(util.errno)
                 } elseif (util.errno == 0) then {
+                    for (toks) do {t->
+                        util.lines.push("lines unavailable in interpreter")
+                    }
                     var vals := parser.parse(toks)
                     if (!io.input.isatty && (util.errno != 0)) then {
                         sys.exit(util.errno)
                     } elseif (util.errno == 0) then {
-                        // TODO - IDR doesn't support tcenv
-                        vals := identifierresolution.resolve(vals, tcenv)
+                        // TODO - this used to pass tcenv into identifier
+                        // resolution, but doesn't now. Things seem to work.
+                        vals := identifierresolution.resolve(vals)
                         if (!io.input.isatty && (util.errno != 0)) then {
                             sys.exit(util.errno)
                         } elseif (util.errno == 0) then {

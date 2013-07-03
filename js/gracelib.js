@@ -1154,8 +1154,9 @@ function gracecode_util() {
                     + callmethod(this._lines, "at",
                         [1], new GraceNum(this._linenum._value - 1))._value
                     + "\n");
+            var linenumsize = callmethod(callmethod(this._linenum, "asString", []), "size", []);
             var arr = "----";
-            for (var i=0; i<this._linepos._value; i++)
+            for (var i=1; i<this._linepos._value+linenumsize._value; i++)
                 arr = arr + "-";
             minigrace.stderr_write("  " + this._linenum._value + ": "
                 + callmethod(this._lines, "at",
@@ -1546,6 +1547,7 @@ ellipsis.methods.asString = function() {return new GraceString("ellipsis");}
 var ExceptionObject = new GraceException("Exception", false);
 var ErrorObject = new GraceException("Error", ExceptionObject);
 var RuntimeErrorObject = new GraceException("RuntimeError", ErrorObject);
+var TypeErrorObject = new GraceException("TypeError", RuntimeErrorObject);
 
 var Grace_native_prelude = Grace_allocObject();
 var Grace_prelude = Grace_native_prelude;
@@ -1558,6 +1560,9 @@ Grace_prelude.methods["Error"] = function(argcv) {
 }
 Grace_prelude.methods["RuntimeError"] = function(argcv) {
     return RuntimeErrorObject;
+}
+Grace_prelude.methods["TypeError"] = function(argcv) {
+    return TypeErrorObject;
 }
 Grace_prelude.methods["while()do"] = function(argcv, c, b) {
     while (Grace_isTrue(callmethod(c, "apply", [0]))) {

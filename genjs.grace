@@ -182,6 +182,15 @@ method compileobjdefdec(o, selfr, pos) {
     if (ast.findAnnotation(o, "parent")) then {
         out("  {selfr}.superobj = {val};")
     }
+    if (o.dtype != false) then {
+        linenum := o.line
+        out "  lineNumber = {linenum};"
+        out "  if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
+        out "    [1], {val})))"
+        out "      throw new GraceExceptionPacket(TypeErrorObject,"
+        out "            new GraceString(\"expected \""
+        out "            + \"initial value of def '{o.name.value}' to be of type {o.dtype.value}\"))";
+    }
 }
 method compileobjvardec(o, selfr, pos) {
     var val := "undefined"
@@ -226,6 +235,18 @@ method compileobjvardec(o, selfr, pos) {
     }
     if (!isWritable) then {
         out("  writer_{modname}_{nmi}{myc}._private = true;")
+    }
+    if (o.dtype != false) then {
+        if (val == "undefined") then {
+            return true
+        }
+        linenum := o.line
+        out "  lineNumber = {linenum};"
+        out "  if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
+        out "    [1], {val})))"
+        out "      throw new GraceExceptionPacket(TypeErrorObject,"
+        out "            new GraceString(\"expected \""
+        out "            + \"initial value of var '{o.name.value}' to be of type {o.dtype.value}\"))";
     }
 }
 method compileclass(o) {
@@ -277,6 +298,7 @@ method compileobject(o, outerRef, inheritingObject) {
         }
     }
     for (o.value) do { e ->
+        out "  sourceObject = {selfr};"
         if (e.kind == "method") then {
         } elseif (e.kind == "vardec") then {
             compileobjvardec(e, selfr, pos)
@@ -364,6 +386,11 @@ method compiletype(o) {
         def mnm = escapestring(meth.value)
         out("type{myc}.typeMethods.push(\"{mnm}\");")
     }
+    if (compilationDepth == 1) then {
+        def idd = ast.identifierNode.new(o.value, false)
+        compilenode(ast.methodNode.new(idd, [ast.signaturePart.new(o.value)],
+            [idd], false))
+    }
     o.register := "type{myc}"
 }
 method compilefor(o) {
@@ -418,6 +445,12 @@ method compilemethod(o, selfobj) {
                 ++ "Array.prototype.slice.call(arguments, curarg, "
                 ++ "curarg + argcv[{partnr - 1}] - {part.params.size}));")
             out("  curarg += argcv[{partnr - 1}] - {part.params.size};")
+        } else {
+            if (!o.selfclosure) then {
+                out "if (argcv[{partnr - 1}] > {part.params.size})"
+                out("      callmethod(var_RuntimeError, \"raise\", [1], new "
+                    ++ "GraceString(\"too many arguments for {part.name}\"));")
+            }
         }
     }
     if (o.generics.size > 0) then {
@@ -436,6 +469,34 @@ method compilemethod(o, selfobj) {
         }
         out("  \}")
         out("// End generics")
+        out "var curarg2 = 1;"
+        for (o.signature.indices) do { partnr ->
+            var part := o.signature[partnr]
+            for (part.params) do { p ->
+                if (p.dtype != false) then {
+                    for (o.generics) do {g->
+                        if (p.dtype.value == g.value) then {
+                            linenum := o.line
+                            out "  lineNumber = {linenum};"
+                            out "  if (!Grace_isTrue(callmethod({compilenode(p.dtype)}, \"match\","
+                            out "    [1], arguments[curarg2])))"
+                            out "      throw new GraceExceptionPacket(TypeErrorObject,"
+                            out "            new GraceString(\"expected \""
+                            out "             + \"parameter '{p.value}' \""
+                            out "             + \"to be of type {p.dtype.value}\"));";
+                        }
+                    }
+                }
+                out("  curarg2++;")
+            }
+            if (part.vararg != false) then {
+                out("  var {varf(part.vararg.value)} = new GraceList("
+                    ++ "Array.prototype.slice.call(arguments, curarg2, "
+                    ++ "curarg2 + argcv[{partnr - 1}] - {part.params.size}));")
+                out("  curarg2 += argcv[{partnr - 1}] - {part.params.size};")
+            }
+        }
+        out "// End checking generics"
     }
     out("  var returnTarget = invocationCount;")
     out("  invocationCount++;")
@@ -646,7 +707,10 @@ method compilebind(o) {
         out("  " ++ varf(nm) ++ " = " ++ val ++ ";")
         o.register := val
     } elseif (dest.kind == "member") then {
-        dest.value := dest.value ++ ":="
+        if (dest.value.substringFrom(dest.value.size - 1)to(dest.value.size)
+            != ":=") then {
+            dest.value := dest.value ++ ":="
+        }
         c := ast.callNode.new(dest, [ast.callWithPart.new(dest.value, [o.value])])
         r := compilenode(c)
         o.register := r
@@ -659,11 +723,13 @@ method compilebind(o) {
 }
 method compiledefdec(o) {
     var nm
+    var snm
     if (o.name.kind == "generic") then {
-        nm := escapestring(o.name.value.value)
+        snm := o.name.value.value
     } else {
-        nm := escapestring(o.name.value)
+        snm := o.name.value
     }
+    nm := escapestring(snm)
     declaredvars.push(nm)
     var val := compilenode(o.value)
     out("  var " ++ varf(nm) ++ " = " ++ val ++ ";")
@@ -673,6 +739,15 @@ method compiledefdec(o) {
         if (ast.findAnnotation(o, "parent")) then {
             out("  this.superobj = {val};")
         }
+    }
+    if (o.dtype != false) then {
+        linenum := o.line
+        out "  lineNumber = {linenum};"
+        out "  if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
+        out "    [1], {varf(nm)})))"
+        out "      throw new GraceExceptionPacket(TypeErrorObject,"
+        out "            new GraceString(\"expected \""
+        out "            + \"initial value of def '{snm}' to be of type {o.dtype.value}\"))";
     }
     o.register := val
 }
@@ -695,6 +770,17 @@ method compilevardec(o) {
         compilenode(ast.methodNode.new(assignID,
             [ast.signaturePart.new(assignID.value, [tmpID])],
             [ast.bindNode.new(o.name, tmpID)], false))
+    }
+    if (o.dtype != false) then {
+        if (val != "false") then {
+            linenum := o.line
+            out "  lineNumber = {linenum};"
+            out "  if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
+            out "    [1], {varf(nm)})))"
+            out "      throw new GraceExceptionPacket(TypeErrorObject,"
+            out "            new GraceString(\"expected \""
+            out "            + \"initial value of var '{o.name.value}' to be of type {o.dtype.value}\"))";
+        }
     }
     o.register := val
 }
@@ -937,6 +1023,13 @@ method compileimport(o) {
     out "    throw new GraceExceptionPacket(RuntimeErrorObject, "
     out "      new GraceString('could not find module {snm}'));"
     out("  var " ++ varf(nm) ++ " = do_import(\"{fn}\", gracecode_{snm});")
+    if (o.dtype != false) then {
+        out "  if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
+        out "    [1], {varf(nm)})))"
+        out "      throw new GraceExceptionPacket(TypeErrorObject,"
+        out "            new GraceString(\"expected \""
+        out "            + \"module {snm} to be of type {o.dtype.value}\"))";
+    }
     o.register := "undefined"
 }
 method compilereturn(o) {

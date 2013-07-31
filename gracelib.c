@@ -90,8 +90,8 @@ ClassData ConcatString;
 ClassData StringIter;
 ClassData Block;
 ClassData Octets;
-ClassData List;
-ClassData ListIter;
+ClassData BuiltinList;
+ClassData BuiltinListIter;
 ClassData PrimitiveArray;
 ClassData Undefined;
 ClassData None;
@@ -110,6 +110,7 @@ ClassData ExceptionPacket;
 ClassData Exception;
 
 Object Dynamic;
+Object List;
 Object prelude = NULL;
 
 struct StringObject {
@@ -132,7 +133,7 @@ struct ConcatStringObject {
     Object left;
     Object right;
 };
-struct ListObject {
+struct BuiltinListObject {
     OBJECT_HEADER;
     int size;
     int space;
@@ -538,7 +539,7 @@ Object MatchResult_asString(Object self, int nparts, int *argcv,
 Object alloc_MatchResult(Object result, Object bindings) {
     gc_pause();
     if (bindings == NULL)
-        bindings = alloc_List();
+        bindings = alloc_BuiltinList();
     Object o = alloc_userobj2(3, 2, MatchResult);
     if (!MatchResult) {
         MatchResult = o->class;
@@ -911,53 +912,53 @@ Object String_Equals(Object self, int nparts, int *argcv,
     }
     return alloc_Boolean(1);
 }
-Object ListIter_next(Object self, int nparts, int *argcv,
+Object BuiltinListIter_next(Object self, int nparts, int *argcv,
         Object *args, int flags) {
     int *pos = (int*)self->data;
     Object *arr = (Object*)(self->data + sizeof(int));
-    struct ListObject *lst = (struct ListObject*)(*arr);
+    struct BuiltinListObject *lst = (struct BuiltinListObject*)(*arr);
     int rpos = *pos;
     *pos  = *pos + 1;
     return lst->items[rpos];
 }
-Object ListIter_havemore(Object self, int nparts, int *argcv,
+Object BuiltinListIter_havemore(Object self, int nparts, int *argcv,
         Object *args, int flags) {
     int *pos = (int*)self->data;
     Object *arr = (Object*)(self->data + sizeof(int));
-    struct ListObject *lst = (struct ListObject*)(*arr);
+    struct BuiltinListObject *lst = (struct BuiltinListObject*)(*arr);
     int rpos = *pos;
     if (*pos < lst->size)
         return alloc_Boolean(1);
     return alloc_Boolean(0);
 }
-void ListIter_mark(Object o) {
+void BuiltinListIter_mark(Object o) {
     Object *lst = (Object*)(o->data + sizeof(int));
     gc_mark(*lst);
 }
-Object alloc_ListIter(Object array) {
-    if (ListIter == NULL) {
-        ListIter = alloc_class2("ListIter", 2, (void*)&ListIter_mark);
-        add_Method(ListIter, "havemore", &ListIter_havemore);
-        add_Method(ListIter, "next", &ListIter_next);
+Object alloc_BuiltinListIter(Object array) {
+    if (BuiltinListIter == NULL) {
+        BuiltinListIter = alloc_class2("BuiltinListIter", 2, (void*)&BuiltinListIter_mark);
+        add_Method(BuiltinListIter, "havemore", &BuiltinListIter_havemore);
+        add_Method(BuiltinListIter, "next", &BuiltinListIter_next);
     }
-    Object o = alloc_obj(sizeof(int) + sizeof(Object), ListIter);
+    Object o = alloc_obj(sizeof(int) + sizeof(Object), BuiltinListIter);
     int *pos = (int*)o->data;
     Object *lst = (Object*)(o->data + sizeof(int));
     *pos = 0;
     *lst = array;
     return o;
 }
-Object List_pop(Object self, int nparts, int *argcv,
+Object BuiltinList_pop(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     sself->size--;
     if (sself->size < 0)
         die("popped from negative value: %i", sself->size);
     return sself->items[sself->size];
 }
-Object List_push(Object self, int nparts, int *argcv,
+Object BuiltinList_push(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     Object other = args[0];
     if (sself->size == sself->space) {
         Object *dt = glmalloc(sizeof(Object) * sself->space * 2);
@@ -972,9 +973,9 @@ Object List_push(Object self, int nparts, int *argcv,
     sself->size++;
     return alloc_Boolean(1);
 }
-Object List_indexAssign(Object self, int nparts, int *argcv,
+Object BuiltinList_indexAssign(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     Object idx = args[0];
     Object val = args[1];
     int index = integerfromAny(idx);
@@ -990,9 +991,9 @@ Object List_indexAssign(Object self, int nparts, int *argcv,
     sself->items[index] = val;
     return val;
 }
-Object List_contains(Object self, int nparts, int *argcv,
+Object BuiltinList_contains(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     Object other = args[0];
     Object my, b;
     int index;
@@ -1005,9 +1006,9 @@ Object List_contains(Object self, int nparts, int *argcv,
     }
     return alloc_Boolean(0);
 }
-Object List_index(Object self, int nparts, int *argcv,
+Object BuiltinList_index(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     int index = integerfromAny(args[0]);
     if (index > sself->size) {
         die("Error: list index out of bounds: %i/%i\n",
@@ -1020,18 +1021,18 @@ Object List_index(Object self, int nparts, int *argcv,
     index--;
     return sself->items[index];
 }
-Object List_iter(Object self, int nparts, int *argcv,
+Object BuiltinList_iter(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    return alloc_ListIter(self);
+    return alloc_BuiltinListIter(self);
 }
-Object List_length(Object self, int nparts, int *argcv,
+Object BuiltinList_length(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     return alloc_Float64(sself->size);
 }
-Object List_asString(Object self, int nparts, int *argcv,
+Object BuiltinList_asString(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     int len = sself->size;
     int i = 0;
     int partcv[] = {1};
@@ -1050,96 +1051,99 @@ Object List_asString(Object self, int nparts, int *argcv,
     gc_unpause();
     return s;
 }
-Object List_indices(Object self, int nparts, int *argcv,
+Object BuiltinList_indices(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
-    Object o = alloc_List();
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
+    Object o = alloc_BuiltinList();
     int slot = gc_frame_newslot(o);
     int i;
     Object f;
     int partcv[] = {1};
     for (i=1; i<=sself->size; i++) {
         f = alloc_Float64(i);
-        List_push(o, 1, partcv, &f, 0);
+        BuiltinList_push(o, 1, partcv, &f, 0);
     }
     gc_frame_setslot(slot, undefined);
     return o;
 }
-Object List_first(Object self, int nparts, int *argcv,
+Object BuiltinList_first(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     return sself->items[0];
 }
-Object List_last(Object self, int nparts, int *argcv,
+Object BuiltinList_last(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     return sself->items[sself->size-1];
 }
-Object List_prepended(Object self, int nparts, int *argcv,
+Object BuiltinList_prepended(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
     int i;
-    Object nl = alloc_List();
+    Object nl = alloc_BuiltinList();
     int partcv[] = {1};
     callmethod(nl, "push", 1, partcv, args);
     for (i = 0; i < sself->size; i++) {
-        List_push(nl, 1, partcv, sself->items + i, 0);
+        BuiltinList_push(nl, 1, partcv, sself->items + i, 0);
     }
     return nl;
 }
-Object List_concat(Object self, int nparts, int *argcv,
+Object BuiltinList_concat(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    struct ListObject *sself = (struct ListObject*)self;
-    struct ListObject *sother = (struct ListObject*)args[0];
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
+    struct BuiltinListObject *sother = (struct BuiltinListObject*)args[0];
     int i;
-    Object nl = alloc_List();
+    Object nl = alloc_BuiltinList();
     int partcv[] = {1};
     for (i=0; i<sself->size; i++)
-        List_push(nl, 1, partcv, sself->items + i, 0);
+        BuiltinList_push(nl, 1, partcv, sself->items + i, 0);
     for (i=0; i<sother->size; i++)
-        List_push(nl, 1, partcv, sother->items + i, 0);
+        BuiltinList_push(nl, 1, partcv, sother->items + i, 0);
     return nl;
 }
-void List__release(Object o) {
-    struct ListObject *s = (struct ListObject *)o;
+void BuiltinList__release(Object o) {
+    struct BuiltinListObject *s = (struct BuiltinListObject *)o;
     glfree(s->items);
 }
-void List_mark(Object o) {
-    struct ListObject *s = (struct ListObject *)o;
+void BuiltinList_mark(Object o) {
+    struct BuiltinListObject *s = (struct BuiltinListObject *)o;
     int i;
     for (i=0; i<s->size; i++)
         gc_mark(s->items[i]);
 }
-Object alloc_List() {
-    if (List == NULL) {
-        List = alloc_class3("List", 19, (void*)&List_mark,
-                (void*)&List__release);
-        add_Method(List, "asString", &List_asString);
-        add_Method(List, "at", &List_index);
-        add_Method(List, "[]", &List_index);
-        add_Method(List, "at()put", &List_indexAssign);
-        add_Method(List, "[]:=", &List_indexAssign);
-        add_Method(List, "push", &List_push);
-        add_Method(List, "pop", &List_pop);
-        add_Method(List, "length", &List_length);
-        add_Method(List, "size", &List_length);
-        add_Method(List, "iter", &List_iter);
-        add_Method(List, "iterator", &List_iter);
-        add_Method(List, "contains", &List_contains);
-        add_Method(List, "==", &Object_Equals);
-        add_Method(List, "!=", &Object_NotEquals);
-        add_Method(List, "indices", &List_indices);
-        add_Method(List, "first", &List_first);
-        add_Method(List, "last", &List_last);
-        add_Method(List, "prepended", &List_prepended);
-        add_Method(List, "++", &List_concat);
+Object alloc_BuiltinList() {
+    if (BuiltinList == NULL) {
+        BuiltinList = alloc_class3("BuiltinList", 19, (void*)&BuiltinList_mark,
+                (void*)&BuiltinList__release);
+        add_Method(BuiltinList, "asString", &BuiltinList_asString);
+        add_Method(BuiltinList, "at", &BuiltinList_index);
+        add_Method(BuiltinList, "[]", &BuiltinList_index);
+        add_Method(BuiltinList, "at()put", &BuiltinList_indexAssign);
+        add_Method(BuiltinList, "[]:=", &BuiltinList_indexAssign);
+        add_Method(BuiltinList, "push", &BuiltinList_push);
+        add_Method(BuiltinList, "pop", &BuiltinList_pop);
+        add_Method(BuiltinList, "length", &BuiltinList_length);
+        add_Method(BuiltinList, "size", &BuiltinList_length);
+        add_Method(BuiltinList, "iter", &BuiltinList_iter);
+        add_Method(BuiltinList, "iterator", &BuiltinList_iter);
+        add_Method(BuiltinList, "contains", &BuiltinList_contains);
+        add_Method(BuiltinList, "==", &Object_Equals);
+        add_Method(BuiltinList, "!=", &Object_NotEquals);
+        add_Method(BuiltinList, "indices", &BuiltinList_indices);
+        add_Method(BuiltinList, "first", &BuiltinList_first);
+        add_Method(BuiltinList, "last", &BuiltinList_last);
+        add_Method(BuiltinList, "prepended", &BuiltinList_prepended);
+        add_Method(BuiltinList, "++", &BuiltinList_concat);
     }
-    Object o = alloc_obj(sizeof(Object*) + sizeof(int) * 2, List);
-    struct ListObject *lo = (struct ListObject*)o;
+    Object o = alloc_obj(sizeof(Object*) + sizeof(int) * 2, BuiltinList);
+    struct BuiltinListObject *lo = (struct BuiltinListObject*)o;
     lo->size = 0;
     lo->space = 8;
     lo->items = glmalloc(sizeof(Object) * 8);
     return o;
+}
+Object alloc_List() {
+    return alloc_BuiltinList();
 }
 Object PrimitiveArray_indexAssign(Object self, int nparts, int *argcv,
         Object *args, int flags) {
@@ -1174,14 +1178,14 @@ Object PrimitiveArray_index(Object self, int nparts, int *argcv,
 }
 Object alloc_PrimitiveArray(int size) {
     if (PrimitiveArray == NULL) {
-        PrimitiveArray = alloc_class3("PrimitiveArray", 9, (void*)&List_mark,
-                (void*)&List__release);
+        PrimitiveArray = alloc_class3("PrimitiveArray", 9, (void*)&BuiltinList_mark,
+                (void*)&BuiltinList__release);
         add_Method(PrimitiveArray, "at", &PrimitiveArray_index);
         add_Method(PrimitiveArray, "[]", &PrimitiveArray_index);
         add_Method(PrimitiveArray, "at()put", &PrimitiveArray_indexAssign);
         add_Method(PrimitiveArray, "[]:=", &PrimitiveArray_indexAssign);
-        add_Method(PrimitiveArray, "asString", &List_asString);
-        add_Method(PrimitiveArray, "size", &List_length);
+        add_Method(PrimitiveArray, "asString", &BuiltinList_asString);
+        add_Method(PrimitiveArray, "size", &BuiltinList_length);
         add_Method(PrimitiveArray, "==", &Object_Equals);
         add_Method(PrimitiveArray, "!=", &Object_NotEquals);
     }
@@ -1366,14 +1370,14 @@ void ConcatString__FillBuffer(Object self, char *buf, int len) {
 Object String_indices(Object self, int nparts, int *argcv,
         Object *args, int flags) {
     struct StringObject *sself = (struct StringObject*)self;
-    Object o = alloc_List();
+    Object o = alloc_BuiltinList();
     int i;
     Object f;
     gc_pause();
     int partcv[] = {1};
     for (i=1; i<=sself->size; i++) {
         f = alloc_Float64(i);
-        List_push(o, 1, partcv, &f, 0);
+        BuiltinList_push(o, 1, partcv, &f, 0);
     }
     gc_unpause();
     return o;
@@ -1436,10 +1440,6 @@ Object ConcatString_iter(Object self, int nparts, int *argcv,
 }
 Object ConcatString_substringFrom_to(Object self,
         int nparts, int *argcv, Object *args, int flags) {
-    int st = integerfromAny(args[0]);
-    int en = integerfromAny(args[1]);
-    st--;
-    en--;
     struct ConcatStringObject *sself = (struct ConcatStringObject*)self;
     ConcatString__Flatten(self);
     return String_substringFrom_to(self, nparts, argcv, args, flags);
@@ -1611,7 +1611,7 @@ Object String_substringFrom_to(Object self,
         int nparts, int *argcv, Object *args, int flags) {
     struct StringObject* sself = (struct StringObject*)self;
     int st = integerfromAny(args[0]);
-    int en = integerfromAny(args[1]);
+    int en = (argcv[1] > 0 ? integerfromAny(args[1]) : sself->size + 1);
     st--;
     en--;
     int mysize = sself->size;
@@ -1893,11 +1893,11 @@ Object Float64_Range(Object self, int nparts, int *argcv,
     int i = a;
     int j = b;
     gc_pause();
-    Object arr = alloc_List();
+    Object arr = alloc_BuiltinList();
     int partcv[] = {1};
     for (; i<=b; i++) {
         Object v = alloc_Float64(i);
-        List_push(arr, 1, partcv, &v, 0);
+        BuiltinList_push(arr, 1, partcv, &v, 0);
     }
     gc_unpause();
     return (Object)arr;
@@ -3847,7 +3847,7 @@ Object getdatum2(Object o, int index) {
 }
 Object process_varargs(Object *args, int fixed, int nargs) {
     int i = fixed;
-    Object lst = alloc_List();
+    Object lst = alloc_BuiltinList();
     int partcv[] = {1};
     for (; i<nargs; i++) {
         callmethod(lst, "push", 1, partcv, &args[i]);
@@ -4027,6 +4027,21 @@ void gracelib_argv(char **argv) {
     alloc_Boolean(0);
     Dynamic = alloc_Type("Dynamic", 0);
     gc_root(Dynamic);
+    List = alloc_Type("List", 14);
+    gc_root(List);
+    add_Method((ClassData)List, "==", NULL);
+    add_Method((ClassData)List, "!=", NULL);
+    add_Method((ClassData)List, "push", NULL);
+    add_Method((ClassData)List, "pop", NULL);
+    add_Method((ClassData)List, "at", NULL);
+    add_Method((ClassData)List, "at()put", NULL);
+    add_Method((ClassData)List, "[]", NULL);
+    add_Method((ClassData)List, "[]:=", NULL);
+    add_Method((ClassData)List, "size", NULL);
+    add_Method((ClassData)List, "iterator", NULL);
+    add_Method((ClassData)List, "++", NULL);
+    add_Method((ClassData)List, "asString", NULL);
+    add_Method((ClassData)List, "asDebugString", NULL);
     ExceptionObject = alloc_Exception("Exception", NULL);
     gc_root(ExceptionObject);
     ErrorObject = alloc_Exception("Error", ExceptionObject);
@@ -4189,6 +4204,11 @@ Object grace_while_do(Object self, int nparts, int *argcv,
         Object *argv, int flags) {
     if (nparts != 2 || argcv[0] != 1 || argcv[1] != 1)
         die("while-do requires exactly two arguments");
+    if (argv[0]->class == Boolean || argv[0]->class == Number) {
+        gracedie("Type error: expected Block for argument condition (1) of "
+                "while()do (defined at NativePrelude:0), got %s",
+                argv[0]->class->name);
+    }
     while (istrue(callmethod(argv[0], "apply", 0, NULL, NULL))) {
         callmethod(argv[1], "apply", 0, NULL, NULL);
     }
@@ -4232,7 +4252,7 @@ Object prelude__methods(Object self, int argc, int *argcv,
         Object *argv, int flags) {
     ClassData c = self->class;
     gc_pause();
-    Object l = alloc_List();
+    Object l = alloc_BuiltinList();
     while (c != NULL) {
         int i;
         int partcv[] = {1};

@@ -266,6 +266,9 @@ method compileclass(o) {
             [o.name], false)
         compilenode(meth)
     }
+    for (o.annotations) do {a->
+        con.annotations.push(a)
+    }
     o.register := compilenode(con)
 }
 method compileobject(o, outerRef, inheritingObject) {
@@ -1138,7 +1141,7 @@ method compilenode(o) {
         compilefor(o)
     }
     if ((o.kind == "call")) then {
-        if (o.value.value == "print") then {
+        if ((o.value.value == "print") && (o.value.in.value == "prelude")) then {
             var args := []
             for (o.with) do { part ->
                 for (part.args) do { prm ->

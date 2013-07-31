@@ -10,6 +10,7 @@ import "mirrors" as mirrors
 class Scope.new(parent') {
     def elements = collections.map.new
     def elementScopes = collections.map.new
+    def elementDeclarations = collections.map.new
     def parent = parent'
     var hasParent := true
     var variety := "block"
@@ -365,6 +366,14 @@ method resolveIdentifiersActual(node) {
             tmp.generics := node.generics
             return tmp
         }
+        if (node.value.kind == "identifier") then {
+            def ck = getNameKind(node.value.value)
+            if (!node.isPattern) then {
+                if ((ck == "def") || (ck == "var")) then {
+                    util.semantic_error ""
+                }
+            }
+        }
     }
     if (node.kind == "block") then {
         if (node.params.size == 1) then {
@@ -401,9 +410,35 @@ method resolveIdentifiersActual(node) {
             )
             def newcall = ast.callNode.new(newmem, node.value.with)
             return ast.inheritsNode.new(newcall)
+        } else {
+            if (node.value.kind == "member") then {
+                def newmem = ast.memberNode.new(node.value.value
+                                                ++ "()object",
+                    node.value.in
+                )
+                def newcall = ast.callNode.new(newmem, collections.list.new(
+                    ast.callWithPart.new(node.value.value, []),
+                    ast.callWithPart.new("object",
+                        [ast.identifierNode.new("self", false)])
+                    )
+                )
+                return ast.inheritsNode.new(newcall)
+            }
         }
     }
     node
+}
+method checkRedefinition(ident) {
+    def nk = getNameKind(ident.value)
+    if ((nk == "def").orElse {nk == "var"}) then {
+        if (getNameScope(ident.value)
+            .elementDeclarations.contains(ident.value)
+        ) then {
+            util.setPosition(ident.line, ident.linePos)
+            util.syntax_error "Redeclaration of existing name '{ident.value}'."
+        }
+    }
+    scope.elementDeclarations.put(ident.value, true)
 }
 method resolveIdentifiers(topNode) {
     // Recursively replace bare identifiers with their fully-qualified
@@ -412,7 +447,9 @@ method resolveIdentifiers(topNode) {
         return topNode
     }
     topNode.map { n -> resolveIdentifiersActual(n) } before { node ->
+        util.setPosition(node.line, 1)
         if (node.kind == "class") then {
+            checkRedefinition(node.name)
             scope.add(node.name.value) as "def"
             def classScope = Scope.new(scope)
             classScope.add(node.constructor.value)
@@ -487,6 +524,9 @@ method resolveIdentifiers(topNode) {
                 }
             }
         }
+        if (node.kind == "if") then {
+            pushScope
+        }
         if (node.kind == "block") then {
             pushScope
             var tmp := node
@@ -494,6 +534,7 @@ method resolveIdentifiers(topNode) {
                 tmp := rewritematchblock(tmp)
             }
             for (tmp.params) do {p->
+                checkRedefinition(p)
                 scope.add(p.value)as "def"
             }
         }
@@ -526,10 +567,12 @@ method resolveIdentifiers(topNode) {
             scope.variety := "method"
             scope.name := node.value.value
             for (node.generics) do {g->
+                checkRedefinition(g)
                 scope.add(g.value) as "def"
             }
             for (node.signature) do {s->
                 for (s.params) do {p->
+                    checkRedefinition(p)
                     scope.add(p.value)as "def"
                 }
                 if (false != s.vararg) then {
@@ -539,6 +582,7 @@ method resolveIdentifiers(topNode) {
         }
         if (node.kind == "vardec") then {
             if ((scope.variety != "object") && (scope.variety != "class")) then {
+                checkRedefinition(node.name)
                 scope.add(node.name.value)as "var"
             } else {
                 scope.add(node.name.value)
@@ -546,17 +590,15 @@ method resolveIdentifiers(topNode) {
         }
         if (node.kind == "defdec") then {
             if ((scope.variety != "object") && (scope.variety != "class")) then {
+                checkRedefinition(node.name)
                 scope.add(node.name.value)as "def"
             } else {
                 scope.add(node.name.value)
             }
         }
-        if (node.kind == "defdec") then {
-            if ((scope.variety != "object") && (scope.variety != "class")) then {
-                scope.add(node.name.value)as "def"
-            } else {
-                scope.add(node.name.value)
-            }
+        if (node.kind == "import") then {
+            checkRedefinition(node)
+            scope.add(node.value) as "def"
         }
     } after { node ->
         if (node.kind == "class") then {
@@ -570,6 +612,9 @@ method resolveIdentifiers(topNode) {
                     scope)
             }
             node.data := scope
+            popScope
+        }
+        if (node.kind == "if") then {
             popScope
         }
         if (node.kind == "block") then {
@@ -648,6 +693,7 @@ method resolve(values) {
     builtinObj.add "String" as "def"
     builtinObj.add "Number" as "def"
     builtinObj.add "Boolean" as "def"
+    builtinObj.add "List" as "def"
     builtinObj.add "Block" as "def"
     builtinObj.add "Done" as "def"
     builtinObj.add "done" as "def"
@@ -661,7 +707,7 @@ method resolve(values) {
     builtinObj.add "public" as "def"
     builtinObj.add "confidential" as "def"
     builtinObj.add "override" as "def"
-    builtinObj.add "parent" as "def"
+    builtinObj.add "parent" as "method"
     builtinObj.add "prelude" as "def"
     builtinObj.add "_prelude" as "def"
     builtinObj.add "..." as "def"

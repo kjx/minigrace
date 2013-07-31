@@ -431,20 +431,19 @@ method doif {
         var minInd := statementIndent + 1
         if (accept("identifier") && (sym.value == "then")) then {
             next
-            if (accept("lbrace")) then {
-                next
-                if (sym.line == lastToken.line) then {
-                    minIndentLevel := sym.linePos - 1
-                } else {
-                    minIndentLevel := minInd
-                }
-                while {(accept("rbrace")).not} do {
-                    expectConsume {statement}
-                    v := values.pop
-                    body.push(v)
-                }
-                next
+            expect "lbrace"
+            next
+            if (sym.line == lastToken.line) then {
+                minIndentLevel := sym.linePos - 1
+            } else {
+                minIndentLevel := minInd
             }
+            while {(accept("rbrace")).not} do {
+                expectConsume {statement}
+                v := values.pop
+                body.push(v)
+            }
+            next
             var econd
             var eif
             var newelse
@@ -1299,7 +1298,9 @@ method doobject {
             methoddec
             inheritsdec
             statement
-            if (values.size == sz) then {
+            if (sym.kind == "eof") then {
+                expect("rbrace")
+            } elseif ((values.size == sz) && (lastToken.kind != "semicolon")) then {
                 util.setPosition(sym.line, sym.linePos)
                 util.syntax_error("Unexpected symbol in "
                     ++ "object declaration. Expected 'var', 'def', 'method', "
@@ -1349,6 +1350,7 @@ method doclass {
         var s := methodsignature(false)
         var csig := s.sig
         var constructorName := s.m
+        var dtype := s.rtype
         def anns = doannotation
         if (!accept("lbrace")) then {
             util.syntax_error("Class declaration without body.")
@@ -1373,7 +1375,8 @@ method doclass {
         }
         next
         util.setline(btok.line)
-        var o := ast.classNode.new(cname, csig, body, false, constructorName)
+        var o :=
+            ast.classNode.new(cname, csig, body, false, constructorName, dtype)
         o.generics := s.generics
         if (false != anns) then {
             o.annotations.extend(anns)
@@ -1488,7 +1491,7 @@ method doclassOld {
                 body.push(p)
             }
             var o := ast.classNode.new(cname, [ast.signaturePart.new("new", params)],
-                body, superclass, ast.identifierNode.new("new", false))
+                body, superclass, ast.identifierNode.new("new", false), false)
             values.push(o)
         } else {
             util.syntax_error("Class definition without body.")

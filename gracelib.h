@@ -82,6 +82,7 @@ struct OctetsObject {
 
 Object alloc_Float64(double);
 Object alloc_List();
+Object alloc_BuiltinList();
 Object alloc_String(const char*);
 Object tailcall(Object, const char *, int, int *, Object *, int);
 Object callmethod3(Object, const char *, int, int *, Object *, int);
@@ -123,6 +124,7 @@ Object gracelib_print(Object, int, Object*);
 Object gracelib_length(Object);
 Object dlmodule(const char *);
 Object process_varargs(Object *, int, int);
+void assertClass(Object, ClassData);
 
 void bufferfromString(Object, char *);
 char *cstringfromString(Object);

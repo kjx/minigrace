@@ -181,7 +181,7 @@ method compilearray(o) {
     var myc := auto_count
     auto_count := auto_count + 1
     var r
-    out("  Object array" ++ myc ++ " = alloc_List();")
+    out("  Object array" ++ myc ++ " = alloc_BuiltinList();")
     out("  gc_pause();")
     var i := 0
     for (o.value) do {a ->
@@ -414,6 +414,10 @@ method compileclass(o, includeConstant) {
             def meth = ast.methodNode.new(o.name, [ast.signaturePart.new(o.name.value)], [o.name], false)
             compilenode(meth)
         }
+        for (o.annotations) do {a->
+            io.error.write("pushing annotation {a.pretty(0)} to class {o.name}")
+            con.annotations.push(a)
+        }
         o.register := compilenode(con)
     } else {
         o.register := compilenode(cobj)
@@ -499,6 +503,9 @@ method compileobject(o, outerRef) {
         } elseif (e.kind == "class") then {
             def cd = ast.defDecNode.new(e.name,
                 e, false)
+            for (e.annotations) do {a->
+                cd.annotations.push(a)
+            }
             if (util.extensions.contains("DefaultVisibility")) then {
                 if (util.extensions.get("DefaultVisibility") == "public") then
                     {
@@ -647,6 +654,12 @@ method compilemethod(o, selfobj, pos) {
     out("  int i;")
     out("  int curarg = 0;")
     out("  int pushcv[] = \{1\};")
+    if (!o.selfclosure) then {
+        out "  if (nparts < {o.signature.size} && args)"
+        out("    gracedie(\"missing argument list for {name} (probably "
+            ++ "reflection error): got %i lists, expected "
+            ++ "{o.signature.size}.\", nparts);")
+    }
     for (o.signature.indices) do { partnr ->
         var part := o.signature[partnr]
         for (part.params) do { param ->
@@ -667,7 +680,7 @@ method compilemethod(o, selfobj, pos) {
         }
         if (part.vararg != false) then { // part has vararg
             var van := escapeident(part.vararg.value)
-            out("  Object var_init_{van} = alloc_List();")
+            out("  Object var_init_{van} = alloc_BuiltinList();")
             out("  for (i = {part.params.size}; i < argcv[{partnr - 1}]; i++) \{")
             out("    callmethod(var_init_{van}, \"push\", 1, pushcv, &args[curarg]);")
             out("    curarg++;")
@@ -1121,17 +1134,9 @@ method compileidentifier(o) {
         o.register := "ellipsis{auto_count}"
         auto_count := auto_count + 1
     } else {
-        if (importnames.contains(name)) then {
-            o.register := importnames.get(name)
-        } else {
-            name := escapestring2(name)
-            if (modules.contains(name)) then {
-                o.register := "module_" ++ name
-            } else {
-                usedvars.push(name)
-                o.register := "*var_{name}"
-            }
-        }
+        name := escapestring2(name)
+        usedvars.push(name)
+        o.register := "*var_{name}"
     }
 }
 method compilebind(o) {
@@ -1679,7 +1684,7 @@ method compilenode(o) {
         compilefor(o)
     }
     if ((o.kind == "call")) then {
-        if (o.value.value == "print") then {
+        if ((o.value.value == "print").andAlso {o.value.in.value == "prelude"}) then {
             var args := []
             for (o.with.first.args) do { prm ->
                 var r := compilenode(prm)
@@ -1955,6 +1960,7 @@ method compile(vl, of, mn, rm, bt) {
     outprint("extern Object Number;")
     outprint("extern Object Boolean;")
     outprint("extern Object Dynamic;")
+    outprint("extern Object List;")
     outprint("extern Object Block;")
     outprint("extern Object None;")
     outprint("extern Object Type;")
@@ -2037,6 +2043,8 @@ method compile(vl, of, mn, rm, bt) {
     out("  type_Boolean = Boolean;")
     out("  Object *var_Dynamic = alloc_var();")
     out("  *var_Dynamic = Dynamic;")
+    out("  Object *var_List = alloc_var();")
+    out("  *var_List = List;")
     out("  Object *var_Type = alloc_var();")
     out("  *var_Type = Type;")
     out("  Object *var__prelude = alloc_var();")
@@ -2111,7 +2119,7 @@ method compile(vl, of, mn, rm, bt) {
         out("  Object params[1];")
         out("  undefined = alloc_Undefined();")
         out("  none = alloc_none();")
-        out("  Object tmp_argv = alloc_List();")
+        out("  Object tmp_argv = alloc_BuiltinList();")
         out("  gc_root(tmp_argv);")
         out("  int partcv_push[] = \{1\};")
         out("  int i; for (i=0; i<argc; i++) \{")

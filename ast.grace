@@ -130,10 +130,12 @@ class ifNode.new(cond, thenblock', elseblock') {
     }
     method map(blk)before(blkBefore)after(blkAfter) {
         blkBefore.apply(self)
-        var n := ifNode.new(self.value.map(blk)
-                before(blkBefore)after(blkAfter),
-            listMap(self.thenblock, blk)before(blkBefore)after(blkAfter),
-            listMap(self.elseblock, blk)before(blkBefore)after(blkAfter))
+        def v = self.value.map(blk)before(blkBefore)after(blkAfter)
+        def tb = listMap(self.thenblock, blk)before(blkBefore)after(blkAfter)
+        blkAfter.apply(self)
+        blkBefore.apply(self)
+        def eb = listMap(self.elseblock, blk)before(blkBefore)after(blkAfter)
+        var n := ifNode.new(v, tb, eb)
         n := blk.apply(n)
         n.line := line
         blkAfter.apply(n)
@@ -189,6 +191,9 @@ class blockNode.new(params', body') {
     var register := ""
     var matchingPattern := false
     var line := util.linenum
+    for (params') do {p->
+        p.accept(patternMarkVisitor)
+    }
     method accept(visitor : ASTVisitor) {
         if (visitor.visitBlock(self)) then {
             for (self.params) do { mx ->
@@ -525,6 +530,15 @@ class typeNode.new(name', methods') {
         n := blk.apply(n)
         n.anonymous := self.anonymous
         n.line := line
+        for (listMap(unionTypes, blk)before(blkBefore)after(blkAfter)) do {a->
+            n.unionTypes.push(a.map(blk)before(blkBefore)after(blkAfter))
+        }
+        for (listMap(intersectionTypes, blk)before(blkBefore)after(blkAfter)) do {a->
+            n.intersectionTypes.push(a.map(blk)before(blkBefore)after(blkAfter))
+        }
+        for (listMap(generics, blk)before(blkBefore)after(blkAfter)) do {a->
+            n.generics.push(a.map(blk)before(blkBefore)after(blkAfter))
+        }
         for (listMap(annotations, blk)before(blkBefore)after(blkAfter)) do {a->
             n.annotations.push(a.map(blk)before(blkBefore)after(blkAfter))
         }
@@ -803,6 +817,7 @@ class callNode.new(what, with') {
     var line := 0 + util.linenum
     var register := ""
     var generics := false
+    var isPattern := false
     method accept(visitor : ASTVisitor) {
         if (visitor.visitCall(self)) then {
             self.value.accept(visitor)
@@ -820,6 +835,7 @@ class callNode.new(what, with') {
         if (generics != false) then {
             n.generics := listMap(generics, blk)before(blkBefore)after(blkAfter)
         }
+        n.isPattern := isPattern
         n := blk.apply(n)
         n.line := line
         blkAfter.apply(n)
@@ -883,7 +899,7 @@ class callNode.new(what, with') {
         s
     }
 }
-class classNode.new(name', signature', body', superclass', constructor') {
+class classNode.new(name', signature', body', superclass', constructor', dtype') {
     // [signature]
     //     object {
     //         name := ""
@@ -904,6 +920,7 @@ class classNode.new(name', signature', body', superclass', constructor') {
     def name = name'
     def constructor = constructor'
     def signature = signature'
+    var dtype := dtype'
     var generics := false
     var register := ""
     var line := util.linenum
@@ -935,7 +952,10 @@ class classNode.new(name', signature', body', superclass', constructor') {
         blkBefore.apply(self)
         var n := classNode.new(name.map(blk)before(blkBefore)after(blkAfter),
             listMap(signature, blk)before(blkBefore)after(blkAfter), listMap(value, blk)before(blkBefore)after(blkAfter),
-            maybeMap(superclass, blk, blkBefore, blkAfter), constructor)
+            maybeMap(superclass, blk, blkBefore, blkAfter), constructor, dtype)
+        for (listMap(annotations, blk)before(blkBefore)after(blkAfter)) do {a->
+            n.annotations.push(a.map(blk)before(blkBefore)after(blkAfter))
+        }
         n := blk.apply(n)
         n.line := line
         blkAfter.apply(n)
@@ -971,6 +991,12 @@ class classNode.new(name', signature', body', superclass', constructor') {
             s := s ++ "\n" ++ spc ++ "Generics:"
             for (generics) do {g->
                 s := s ++ "\n  {spc}{g.pretty(0)}"
+            }
+        }
+        if (annotations.size > 0) then {
+            s := s ++ "\n" ++ spc ++ "Annotations:"
+            for (annotations) do {a->
+                s := s ++ "\n  {spc}{a.pretty(depth + 2)}"
             }
         }
         s := s ++ "\n" ++ spc ++ "Body:"
@@ -1671,6 +1697,7 @@ class importNode.new(path', name) {
     var register := ""
     var line := util.linenum
     var dtype := false
+    def linePos = 1
     method accept(visitor : ASTVisitor) {
         visitor.visitImport(self)
     }
@@ -1995,6 +2022,14 @@ method baseVisitor -> ASTVisitor {
         method visitDialect(o) -> Boolean {
             true
         }
+    }
+}
+def ast = self
+def patternMarkVisitor = object {
+    inherits ast.baseVisitor
+    method visitCall(c) {
+        c.isPattern := true
+        true
     }
 }
 

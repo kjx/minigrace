@@ -818,10 +818,14 @@ var var_String = classType(new GraceString(""));
 var var_Number = classType(new GraceNum(1));
 var var_Boolean = classType(new GraceBoolean(true));
 var var_Type = classType(var_Boolean);
+var var_List = new GraceType("List");
+var_List.typeMethods = ["==", "!=", "push", "pop", "at", "at()put",
+    "[]", "[]:=", "size", "iterator", "++", "asString", "asDebugString"];
 var type_String = var_String;
 var type_Number = var_Number;
 var type_Boolean = var_Boolean;
 var type_Dynamic = var_Dynamic;
+var type_List = var_List;
 var var_Block = new GraceType("Block");
 var_Block.typeMethods.push("apply");
 var_Block.typeMethods.push("applyIndirectly");
@@ -1149,6 +1153,30 @@ function gracecode_util() {
         syntax_error: function(argcv, s) {
             minigrace.stderr_write(minigrace.modname + ".grace:" + this._linenum._value + ":" +
                 this._linepos._value + ": syntax error: " + s._value + "\n");
+            if (this._linenum._value > 1)
+                minigrace.stderr_write("  " + (this._linenum._value - 1) + ": "
+                    + callmethod(this._lines, "at",
+                        [1], new GraceNum(this._linenum._value - 1))._value
+                    + "\n");
+            var linenumsize = callmethod(callmethod(this._linenum, "asString", []), "size", []);
+            var arr = "----";
+            for (var i=1; i<this._linepos._value+linenumsize._value; i++)
+                arr = arr + "-";
+            minigrace.stderr_write("  " + this._linenum._value + ": "
+                + callmethod(this._lines, "at",
+                        [1], new GraceNum(this._linenum._value))._value + "\n");
+            minigrace.stderr_write(arr + "^\n");
+            if (this._linenum._value <
+                    callmethod(this._lines, "size", [])._value)
+                minigrace.stderr_write("  " + (this._linenum._value + 1) + ": "
+                    + callmethod(this._lines, "at",
+                        [1], new GraceNum(this._linenum._value + 1))._value
+                    + "\n");
+            throw "ErrorExit";
+        },
+        semantic_error: function(argcv, s) {
+            minigrace.stderr_write(minigrace.modname + ".grace:" + this._linenum._value + ":" +
+                this._linepos._value + ": error: " + s._value + "\n");
             if (this._linenum._value > 1)
                 minigrace.stderr_write("  " + (this._linenum._value - 1) + ": "
                     + callmethod(this._lines, "at",
@@ -1565,6 +1593,10 @@ Grace_prelude.methods["TypeError"] = function(argcv) {
     return TypeErrorObject;
 }
 Grace_prelude.methods["while()do"] = function(argcv, c, b) {
+    if (c.className == "Boolean" || c.className == "Number")
+        throw new GraceExceptionPacket(TypeErrorObject,
+            new GraceString("expected Block for argument condition (1) of "
+                + "while()do, got " + c.className));
     while (Grace_isTrue(callmethod(c, "apply", [0]))) {
         callmethod(b, "apply", [0]);
     }

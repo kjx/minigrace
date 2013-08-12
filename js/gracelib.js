@@ -78,18 +78,6 @@ GraceString.prototype = {
             }
             return new GraceNum(hc);
         },
-        "match()matchesBinding()else": function(argcv, pat, b, e) {
-            return callmethod(pat, "matchObject()matchesBinding()else", [3],
-                    this, b, e);
-        },
-        "matchObject()matchesBinding()else": function(argcv, obj, b, e) {
-            var bl = callmethod(this, "==", [1], obj);
-            if (Grace_isTrue(bl)) {
-                return callmethod(b, "apply", [1], obj);
-            } else {
-                return callmethod(e, "apply", [1], obj);
-            }
-        },
         "indices": function(argcv) {
             var l = [];
             for (var i=1; i<=this._value.length; i++)
@@ -198,18 +186,6 @@ GraceNum.prototype = {
         "hashcode": function(argcv) {
             return new GraceNum(parseInt("" + (this._value * 10)));
         },
-        "match()matchesBinding()else": function(argcv, pat, b, e) {
-            return callmethod(pat, "matchObject()matchesBinding()else", [3],
-                    this, b, e);
-        },
-        "matchObject()matchesBinding()else": function(argcv, obj, b, e) {
-            var bl = callmethod(this, "==", [1], obj);
-            if (Grace_isTrue(bl)) {
-                return callmethod(b, "apply", [1], obj);
-            } else {
-                return callmethod(e, "apply", [1], obj);
-            }
-        },
         "inBase": function(argcv, other) {
             var mine = this._value;
             var base = other._value;
@@ -317,10 +293,6 @@ GraceBoolean.prototype = {
             var t = callmethod(this, "==", [1], other);
             return callmethod(t, "not", [0]);
         },
-        "match()matchesBinding()else": function(argcv, pat, b, e) {
-            return callmethod(pat, "matchObject()matchesBinding()else", [3],
-                    this, b, e);
-        },
         "match": function(argcv, o) {
             if (Grace_isTrue(callmethod(this, "==", [1], o)))
                 return new GraceSuccessfulMatch(o);
@@ -396,10 +368,6 @@ GraceList.prototype = {
             var t = callmethod(this, "==", [1], other);
             return callmethod(t, "not", [0]);
         },
-        "match()matchesBinding()else": function(argcv, pat, b, e) {
-            return callmethod(pat, "matchObject()matchesBinding()else", [3],
-                    this, b, e);
-        },
         "prepended": function(argcv, item) {
             var l = [item];
             for (var i=0; i<this._value.length; i++)
@@ -420,6 +388,14 @@ GraceList.prototype = {
         },
         "last": function(argcv) {
             return this._value[this._value.length-1];
+        },
+        "reduce": function(argcv, initial, block) {
+            var res = initial
+            for (var i=0; i<this._value.length; i++) {
+                var v = this._value[i];
+                res = callmethod(block, "apply", [2], res, v)
+            }
+            return res;
         },
     },
     className: "List",
@@ -1288,6 +1264,23 @@ GraceMirrorMethod.prototype = Grace_allocObject();
 GraceMirrorMethod.prototype.methods['name'] = function(argcv) {
     return new GraceString(this.name);
 }
+GraceMirrorMethod.prototype.methods['partcount'] = function(argcv) {
+    var count = 1;
+    var place = 1;
+    while(place < this.name.length) {
+        if(this.name[place] == "(") {
+            count++;
+            place++;
+        }
+        place++;
+    }
+    return new GraceNum(count);
+}
+
+GraceMirrorMethod.prototype.methods['paramcounts'] = function(argcv) {
+    // the method metadata needed to populate the result is not yet available!
+    return new GraceList([])
+}
 
 function alloc_Mirror(o) {
     var m = Grace_allocObject();
@@ -1298,6 +1291,14 @@ function alloc_Mirror(o) {
         }
         var l = new GraceList(meths);
         return l;
+    }
+    m.methods['getMethod'] = function(argcv, gString) {
+        var name = gString._value
+        for (k in o.methods) {
+            if (name == k) {
+                return (new GraceMirrorMethod(o, k));
+            }
+        }
     }
     return m;
 }

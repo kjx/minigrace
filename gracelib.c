@@ -1006,6 +1006,23 @@ Object BuiltinList_contains(Object self, int nparts, int *argcv,
     }
     return alloc_Boolean(0);
 }
+Object BuiltinList_reduce(Object self, int nparts, int *argcv,
+        Object *args, int flags) {
+    struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
+    Object initialValue = args[0];
+    Object functionBlock = args[1];
+    Object each;
+    Object accum = initialValue;
+    int slot = gc_frame_newslot(accum);
+    int index;
+    for (index=0; index<sself->size; index++) {
+        each = sself->items[index];
+        int partcv[] = {2};
+        accum = callmethod(functionBlock, "apply", 1, partcv, &accum);
+        gc_frame_setslot(slot, accum);
+    }
+    return accum;
+}
 Object BuiltinList_index(Object self, int nparts, int *argcv,
         Object *args, int flags) {
     struct BuiltinListObject *sself = (struct BuiltinListObject*)self;
@@ -1117,7 +1134,7 @@ void BuiltinList_mark(Object o) {
 }
 Object alloc_BuiltinList() {
     if (BuiltinList == NULL) {
-        BuiltinList = alloc_class3("BuiltinList", 19, (void*)&BuiltinList_mark,
+        BuiltinList = alloc_class3("BuiltinList", 20, (void*)&BuiltinList_mark,
                 (void*)&BuiltinList__release);
         add_Method(BuiltinList, "asString", &BuiltinList_asString);
         add_Method(BuiltinList, "at", &BuiltinList_index);
@@ -1138,6 +1155,7 @@ Object alloc_BuiltinList() {
         add_Method(BuiltinList, "last", &BuiltinList_last);
         add_Method(BuiltinList, "prepended", &BuiltinList_prepended);
         add_Method(BuiltinList, "++", &BuiltinList_concat);
+        add_Method(BuiltinList, "reduce", &BuiltinList_reduce);
     }
     Object o = alloc_obj(sizeof(Object*) + sizeof(int) * 2, BuiltinList);
     struct BuiltinListObject *lo = (struct BuiltinListObject*)o;
@@ -3695,8 +3713,8 @@ void Block__release(struct BlockObject *o) {
 Object alloc_Block(Object self, Object(*body)(Object, int, Object*, int),
         const char *modname, int line) {
     char buf[strlen(modname) + 15];
-    sprintf(buf, "Block«%s:%i»", modname, line);
-    ClassData c = alloc_class3(buf, 9, (void*)&Block__mark,
+    sprintf(buf, "Block[%s:%i]", modname, line);
+    ClassData c = alloc_class3(buf, 10, (void*)&Block__mark,
             (void*)&Block__release);
     if (!Block)
         Block = c;
@@ -3712,7 +3730,7 @@ Object alloc_Block(Object self, Object(*body)(Object, int, Object*, int),
         add_Method(c, "_apply", &identity_function);
     struct BlockObject *o = (struct BlockObject*)(
             alloc_obj(sizeof(struct BlockObject) - sizeof(struct Object), c));
-    o->data = glmalloc(sizeof(Object) * 2);
+    o->data = glmalloc(sizeof(Object) * 3);
     o->super = NULL;
     o->flags |= FLAG_BLOCK;
     return (Object)o;
@@ -4224,9 +4242,12 @@ Object grace_for_do(Object self, int nparts, int *argcv,
         die("for-do requires exactly two arguments");
     Object iter = callmethod(argv[0], "iter", 0, NULL, NULL);
     gc_frame_newslot(iter);
+    // Stack slot for argument object
+    int slot = gc_frame_newslot(NULL);
     int partcv[] = {1};
     while (istrue(callmethod(iter, "havemore", 0, NULL, NULL))) {
         Object val = callmethod(iter, "next", 0, NULL, NULL);
+        gc_frame_setslot(slot, val);
         callmethod(argv[1], "apply", 1, partcv, &val);
     }
     return none;
@@ -4320,19 +4341,6 @@ Object prelude_PrimitiveArray(Object self, int argc, int *argcv,
         Object *argv, int flags) {
     return alloc_PrimitiveArrayClassObject();
 }
-Object prelude_tryElse(Object self, int argc, int *argcv, Object *argv,
-        int flags) {
-    error_jump_set = 1;
-    int start_calldepth = calldepth;
-    if (setjmp(error_jump)) {
-        error_jump_set = 0;
-        calldepth = start_calldepth;
-        return callmethod(argv[1], "apply", 0, NULL, NULL);
-    }
-    Object rv = callmethod(argv[0], "apply", 0, NULL, NULL);
-    error_jump_set = 0;
-    return rv;
-}
 Object prelude_Exception(Object self, int argc, int *argcv, Object *argv,
         int flags) {
     return ExceptionObject;
@@ -4344,12 +4352,6 @@ Object prelude_Error(Object self, int argc, int *argcv, Object *argv,
 Object prelude_RuntimeError(Object self, int argc, int *argcv, Object *argv,
         int flags) {
     return RuntimeErrorObject;
-}
-Object prelude_forceError(Object self, int argc, int *argcv, Object *argv,
-        int flags) {
-    char *str = grcstring(argv[0]);
-    die(str);
-    return NULL;
 }
 Object prelude_become(Object self, int argc, int *argcv, Object *argv,
         int flags) {
@@ -4379,7 +4381,7 @@ Object _prelude = NULL;
 Object grace_prelude() {
     if (prelude != NULL)
         return prelude;
-    ClassData c = alloc_class2("NativePrelude", 18, (void*)&UserObj__mark);
+    ClassData c = alloc_class2("NativePrelude", 16, (void*)&UserObj__mark);
     add_Method(c, "asString", &Object_asString);
     add_Method(c, "++", &Object_concat);
     add_Method(c, "==", &Object_Equals);
@@ -4393,8 +4395,6 @@ Object grace_prelude() {
     add_Method(c, "minigrace", &grace_minigrace);
     add_Method(c, "_methods", &prelude__methods)->flags ^= MFLAG_REALSELFONLY;
     add_Method(c, "PrimitiveArray", &prelude_PrimitiveArray);
-    add_Method(c, "try()else", &prelude_tryElse);
-    add_Method(c, "forceError", &prelude_forceError);
     add_Method(c, "become", &prelude_become);
     add_Method(c, "unbecome", &prelude_unbecome);
     add_Method(c, "clone", &prelude_clone);

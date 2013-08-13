@@ -766,13 +766,13 @@ function GraceBlock_match(argcv, o) {
                     new GraceString("Block is not a matching block"));
         }
         var rv = callmethod(this, "apply", [1], o);
-        return new GraceSuccessfulMatch(rv, []);
+        return new GraceSuccessfulMatch(rv);
     }
     var match = callmethod(this.pattern, "match", [1], o);
     if (Grace_isTrue(match)) {
         var bindings = callmethod(match, "bindings", [0]);
         var rv = callmethod(this, "applyIndirectly", [1], bindings);
-        return new GraceSuccessfulMatch(rv, []);
+        return new GraceSuccessfulMatch(rv);
     }
     return new GraceFailedMatch(rv);
 }
@@ -1354,7 +1354,7 @@ function callmethodsuper(obj, methname, argcv) {
 }
 
 function callmethod(obj, methname, argcv) {
-    if (obj === undefined)
+    if (obj === undefined || !obj.methods)
         debugger
     var meth = obj.methods[methname];
     var origSuperDepth = superDepth;

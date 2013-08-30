@@ -16,8 +16,8 @@ var values := []
 var auto_count := 0
 var don'tTakeBlock := false
 var braceIsType := false
-var defaultDefVisibility := "local"
-var defaultVarVisibility := "local"
+var defaultDefVisibility := "confidential"
+var defaultVarVisibility := "confidential"
 var defaultMethodVisibility := "public"
 
 // Global object containing the current token
@@ -1147,16 +1147,9 @@ method defdec {
             }
             o.annotations.extend(anns)
         }
-        if (!hasVisibility) then {
-            if (defaultDefVisibility == "confidential") then {
-                o.annotations.push(ast.identifierNode.new("confidential",
-                    false))
-            }
-        }
-        if (!hasAccessibility) then {
+        if ((!hasVisibility) && (!hasAccessibility)) then {
             if (defaultDefVisibility == "public") then {
-                o.annotations.push(ast.identifierNode.new("readable",
-                    false))
+                o.annotations.push(ast.identifierNode.new("public", false))
             }
         }
         values.push(o)
@@ -1209,13 +1202,7 @@ method vardec {
             }
             o.annotations.extend(anns)
         }
-        if (!hasVisibility) then {
-            if (defaultVarVisibility == "confidential") then {
-                o.annotations.push(ast.identifierNode.new("confidential",
-                    false))
-            }
-        }
-        if (!hasAccessibility) then {
+        if ((!hasVisibility) && (!hasAccessibility)) then {
             if (defaultVarVisibility == "public") then {
                 o.annotations.push(ast.identifierNode.new("readable",
                     false))

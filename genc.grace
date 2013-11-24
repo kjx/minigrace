@@ -7,6 +7,7 @@ import "buildinfo" as buildinfo
 import "mgcollections" as collections
 import "xmodule" as xmodule
 import "mirrors" as mirrors
+import "errormessages" as errormessages
 
 // genc produces C code from the AST, and optionally links and
 // compiles it to native code. Code that affects the way the compiler behaves
@@ -357,7 +358,7 @@ method compileobjvardecmeth(o, selfr, pos) {
         ++ "Object* args, int flags) \{")
     outprint("  struct UserObject *uo = (struct UserObject *)self;")
     outprint("  uo->data[{pos}] = args[0];")
-    outprint("  return none;");
+    outprint("  return done;");
     outprint("\}")
     out("  Method *writer{myc} = addmethodrealflags({selfr}, \"{enm}:=\",&writer_{escmodname}_{inm}_{myc}, {wflags});")
     out("  reader{myc}->definitionModule = modulename;")
@@ -393,7 +394,7 @@ method compileobjvardec(o, selfr, pos) {
         ++ "Object* args, int flags) \{")
     outprint("  struct UserObject *uo = (struct UserObject *)self;")
     outprint("  uo->data[{pos}] = args[0];")
-    outprint("  return none;");
+    outprint("  return done;");
     outprint("\}")
     out("  addmethodreal({selfr}, \"{enm}:=\", &writer_{escmodname}_{inm}_{myc});")
 }
@@ -416,7 +417,6 @@ method compileclass(o, includeConstant) {
             compilenode(meth)
         }
         for (o.annotations) do {a->
-            io.error.write("pushing annotation {a.pretty(0)} to class {o.name}")
             con.annotations.push(a)
         }
         o.register := compilenode(con)
@@ -600,7 +600,7 @@ method compiletype(o) {
         def mnm = escapestring2(meth.value)
         out("add_Method((ClassData)type{myc}, \"{mnm}\", NULL);")
     }
-    o.register := "none"
+    o.register := "done"
     if (o.anonymous) then {
         o.register := "type{myc}"
     }
@@ -632,7 +632,7 @@ method compilefor(o) {
     out("    callmethod({obj}, \"apply\", 1, partcv, params);")
     out("  \}")
     out("  gc_frame_end(forframe{myc});")
-    o.register := "none"
+    o.register := "done"
 }
 method compilemethod(o, selfobj, pos) {
     // How to deal with closures:
@@ -737,7 +737,7 @@ method compilemethod(o, selfobj, pos) {
         out("  \}")
         out("// End generics")
     }
-    var ret := "none"
+    var ret := "done"
     numslots := numslots + countbindings(o.body)
     definebindings(o.body, slot)
     var tailObj := false
@@ -1061,20 +1061,20 @@ method compilewhile(o) {
     out("  gc_frame_end(while_frame{myc});")
     out("  \}")
     out("stackframe = whiletmpstackframe{myc};")
-    o.register := "none"
+    o.register := "done"
 }
 method compileifexpr(o) {
     var myc := auto_count
     auto_count := auto_count + 1
     var cond := compilenode(o.value)
-    out("  Object if{myc} = none;")
+    out("  Object if{myc} = done;")
     out("struct StackFrameObject *iftmpstackframe{myc} = stackframe;")
     out("  if (istrue({cond})) \{")
     var numslots := countbindings(o.thenblock)
     out("stackframe = alloc_StackFrame({numslots}, iftmpstackframe{myc});")
     out("gc_frame_newslot((Object)stackframe);")
-    var tret := "none"
-    var fret := "none"
+    var tret := "done"
+    var fret := "done"
     var tblock := "ERROR"
     var fblock := "ERROR"
     definebindings(o.thenblock, 0)
@@ -1106,10 +1106,10 @@ method compileif(o) {
     var myc := auto_count
     auto_count := auto_count + 1
     var cond := compilenode(o.value)
-    out("  Object if{myc} = none;")
+    out("  Object if{myc} = done;")
     out("  if (istrue({cond})) \{")
-    var tret := "none"
-    var fret := "none"
+    var tret := "done"
+    var fret := "done"
     var tblock := "ERROR"
     var fblock := "ERROR"
     for (o.thenblock) do { l->
@@ -1159,7 +1159,7 @@ method compilebind(o) {
         usedvars.push(nm)
         out("  *var_{nm} = {val};")
         out("  if ({val} == undefined)")
-        out("    callmethod(none, \"assignment\", 0, NULL, NULL);")
+        out("    callmethod(done, \"assignment\", 0, NULL, NULL);")
         auto_count := auto_count + 1
         o.register := val
     } elseif (dest.kind == "member") then {
@@ -1173,7 +1173,7 @@ method compilebind(o) {
         r := compilenode(c)
         o.register := r
     }
-    o.register := "none"
+    o.register := "done"
 }
 method compiledefdec(o) {
     var nm
@@ -1186,14 +1186,14 @@ method compiledefdec(o) {
     var val := compilenode(o.value)
     out("  *var_{nm} = {val};")
     out("  if ({val} == undefined)")
-    out("    callmethod(none, \"assignment\", 0, NULL, NULL);")
+    out("    callmethod(done, \"assignment\", 0, NULL, NULL);")
     if (compilationDepth == 1) then {
         compilenode(ast.methodNode.new(o.name, [ast.signaturePart.new(o.name)], [o.name], false))
         if (ast.findAnnotation(o, "parent")) then {
             out("  ((struct UserObject *)self)->super = {val};")
         }
     }
-    o.register := "none"
+    o.register := "done"
 }
 method compilevardec(o) {
     var nm := escapeident(o.name.value)
@@ -1209,7 +1209,7 @@ method compilevardec(o) {
     out("  *var_{nm} = {val};")
     if (hadval) then {
         out("  if ({val} == undefined)")
-        out("    callmethod(none, \"assignment\", 0, NULL, NULL);")
+        out("    callmethod(done, \"assignment\", 0, NULL, NULL);")
     }
     if (compilationDepth == 1) then {
         compilenode(ast.methodNode.new(o.name, [ast.signaturePart.new(o.name)], [o.name], false))
@@ -1218,7 +1218,7 @@ method compilevardec(o) {
         compilenode(ast.methodNode.new(assignID, [ast.signaturePart.new(assignID, [tmpID])],
             [ast.bindNode.new(o.name, tmpID)], false))
     }
-    o.register := "none"
+    o.register := "done"
 }
 method compileindex(o) {
     var of := compilenode(o.value)
@@ -1259,6 +1259,7 @@ method compilecatchcase(o) {
         out("  params[{idx}] = {e};")
     }
     out "  setline({o.line});"
+    out "  setmodule(modulename);"
     out("  Object catchres{myc} = catchCase({mainblock}, params, {cases.size},"
         ++ "{finally});")
     out("  gc_frame_end(frame{myc});")
@@ -1518,7 +1519,7 @@ method compiledialect(o) {
     globals.push("Object {modg}_init();")
     globals.push("Object {modg};")
     auto_count := auto_count + 1
-    o.register := "none"
+    o.register := "done"
 }
 method compileimport(o) {
     out("// Import of {o.path} as {o.value}")
@@ -1531,7 +1532,7 @@ method compileimport(o) {
             snm := snm ++ c
         }
     }
-    o.register := "none"
+    o.register := "done"
     var nm := escapeident(o.value)
     var fn := escapestring2(o.path)
     var modg := "module_" ++ escapeident(o.path)
@@ -1748,8 +1749,8 @@ method addTransitiveImports(filepath, epath) {
     if (data.contains("modules")) then {
         for (data.get("modules")) do {m->
             if (m == util.modname) then {
-                util.syntax_error("Cyclic import detected: '{m}' is imported "
-                    ++ "by '{epath}', which is imported by '{m}' (and so on).")
+                errormessages.syntaxError("Cyclic import detected: '{m}' is imported "
+                    ++ "by '{epath}', which is imported by '{m}' (and so on).")atLine(1)
             }
             checkimport(m)
         }
@@ -1757,8 +1758,8 @@ method addTransitiveImports(filepath, epath) {
     if (data.contains("path")) then {
         def path = data.get("path").first
         if (path != epath) then {
-            util.syntax_error("Imported module '{epath}' compiled with"
-                ++ " different path '{path}'.")
+            errormessages.syntaxError("Imported module '{epath}' compiled with"
+                ++ " different path '{path}'.")atLine(1)
         }
     }
 }
@@ -1872,7 +1873,7 @@ method checkimport(nm) {
         staticmodules.add(nm)
     }
     if (exists.not) then {
-        util.syntax_error("Failed finding import of '{nm}'.")
+        errormessages.syntaxError("Failed finding import of '{nm}'.")atLine(1)
     }
 }
 method processImports(values') {
@@ -1906,12 +1907,13 @@ method processImports(values') {
                     }
                 } case { e : RuntimeError ->
                     util.setPosition(v.line, 1)
-                    util.syntax_error("Dialect '{nm}' failed to load: {e}.")
+                    errormessages.syntaxError("Dialect '{nm}' failed to load: {e}.")atLine(v.line)
                 } case { e : CheckerFailure ->
-                    if (nothing != e.data) then {
+                    if (done != e.data) then {
                         util.setPosition(e.data.line, e.data.linePos)
+                        errormessages.syntaxError("Dialect failure: {e.message}.")atPosition(e.data.line, e.data.linePos)
                     }
-                    util.syntax_error("Dialect failure: {e.message}.")
+                    errormessages.syntaxError("Dialect failure: {e.message}.")atPosition(util.linenum, 0)
                 }
             }
         }
@@ -1931,7 +1933,7 @@ method processImports(values') {
             }
         }
         if (imperrors.size > 0) then {
-            util.syntax_error("Failed processing import of {imperrors}.")
+            errormessages.syntaxError("Failed processing import of {imperrors}.")atLine(1)
         }
     }
 }
@@ -1963,7 +1965,7 @@ method compile(vl, of, mn, rm, bt) {
     outprint("#endif")
     outprint("static char compilerRevision[] = \"{buildinfo.gitrevision}\";")
     outprint("static Object undefined;")
-    outprint("extern Object none;")
+    outprint("extern Object done;")
     outprint("extern Object _prelude;")
     outprint("extern Object String;")
     outprint("extern Object Number;")
@@ -1971,7 +1973,7 @@ method compile(vl, of, mn, rm, bt) {
     outprint("extern Object Dynamic;")
     outprint("extern Object List;")
     outprint("extern Object Block;")
-    outprint("extern Object None;")
+    outprint("extern Object Done;")
     outprint("extern Object Type;")
     outprint("extern Object GraceDefaultObject;")
     outprint("extern Object sourceObject;")
@@ -1979,8 +1981,7 @@ method compile(vl, of, mn, rm, bt) {
     outprint("static Object type_Number;")
     outprint("static Object type_Boolean;")
     outprint("static Object type_Block;")
-    outprint("static Object type_None;")
-    outprint("static Object type_Void;")
+    outprint("static Object type_Done;")
     outprint("static Object argv;")
     outprint("static Object emptyclosure;")
     outprint("static Object prelude;")
@@ -1996,8 +1997,7 @@ method compile(vl, of, mn, rm, bt) {
     topLevelTypes.put("String", true)
     topLevelTypes.put("Number", true)
     topLevelTypes.put("Boolean", true)
-    topLevelTypes.put("Void", true)
-    topLevelTypes.put("None", true)
+    topLevelTypes.put("Done", true)
     topLevelTypes.put("Block", true)
     for (values) do {v->
         if (v.kind == "type") then {
@@ -2010,6 +2010,7 @@ method compile(vl, of, mn, rm, bt) {
     out("  int flags = 0;")
     out("  int frame = gc_frame_new();")
     out("  Object self = alloc_obj2({nummethods}, {nummethods});")
+    out "  self->class->definitionModule = modulename;"
     out("  gc_root(self);")
     if (util.extensions.contains("NativePrelude")) then {
         out("  prelude = grace_prelude();")
@@ -2027,23 +2028,18 @@ method compile(vl, of, mn, rm, bt) {
     out("  Object *var_MatchFailed = alloc_var();")
     out("  *var_MatchFailed = alloc_MatchFailed();")
     out("  Object *var_noSuchValue = alloc_var();")
-    out("  *var_noSuchValue = none;")
+    out("  *var_noSuchValue = done;")
     out("  Object *var_done = alloc_var();")
-    out("  *var_done = none;")
-    out("  Object *var_nothing = alloc_var();")
-    out("  *var_nothing = none;")
+    out("  *var_done = done;")
     out("  Object *var_String = alloc_var();")
     out("  *var_String = String;")
     out("  type_String = String;")
     out("  Object *var_Block = alloc_var();")
     out("  *var_Block = Block;")
     out("  type_Block = Block;")
-    out("  Object *var_Void = alloc_var();")
-    out("  *var_Void = None;")
-    out("  type_Void = None;")
-    out("  Object *var_None = alloc_var();")
-    out("  *var_None = None;")
-    out("  type_None = None;")
+    out("  Object *var_Done = alloc_var();")
+    out("  *var_Done = Done;")
+    out("  type_Done = Done;")
     out("  Object *var_Number = alloc_var();")
     out("  *var_Number = Number;")
     out("  type_Number = Number;")
@@ -2127,7 +2123,7 @@ method compile(vl, of, mn, rm, bt) {
         out("  gracelib_argv(argv);")
         out("  Object params[1];")
         out("  undefined = alloc_Undefined();")
-        out("  none = alloc_none();")
+        out("  done = alloc_done();")
         out("  Object tmp_argv = alloc_BuiltinList();")
         out("  gc_root(tmp_argv);")
         out("  int partcv_push[] = \{1\};")

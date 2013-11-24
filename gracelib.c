@@ -30,6 +30,8 @@ Object Float64_Add(Object, int nparts, int *argcv,
         Object*, int flags);
 Object Object_asString(Object, int nparts, int *argcv,
         Object*, int flags);
+Object Singleton_asString(Object, int nparts, int *argcv,
+        Object*, int);
 Object Object_Equals(Object, int, int*,
         Object*, int flags);
 Object Object_NotEquals(Object, int, int*,
@@ -65,7 +67,7 @@ char *grcstring(Object s);
 int hash_init = 0;
 
 Object undefined = NULL;
-Object none = NULL;
+Object done = NULL;
 Object ellipsis = NULL;
 Object iomodule;
 Object sysmodule;
@@ -94,7 +96,8 @@ ClassData BuiltinList;
 ClassData BuiltinListIter;
 ClassData PrimitiveArray;
 ClassData Undefined;
-ClassData None;
+ClassData Done;
+ClassData Nothing;
 ClassData ellipsisClass;
 ClassData File;
 ClassData IOModule;
@@ -493,6 +496,11 @@ Object Object_asString(Object receiver, int nparts, int *argcv,
     return alloc_String(buf);
 }
 
+Object Singleton_asString(Object receiver, int nparts, int *argcv,
+        Object* params, int flags) {
+    return alloc_String(receiver->class->name);
+}
+
 Object Object_concat(Object receiver, int nparts, int *argcv,
         Object* params, int flags) {
     Object a = callmethod(receiver, "asString", 0, NULL, NULL);
@@ -770,7 +778,7 @@ Object ExceptionPacket_data(Object self, int argc, int *argcv,
     struct ExceptionPacketObject *e = (struct ExceptionPacketObject *)self;
     if (e->data)
         return e->data;
-    return alloc_none();
+    return alloc_done();
 }
 Object ExceptionPacket_asString(Object self, int argc, int *argcv,
         Object *argv, int flags) {
@@ -785,7 +793,7 @@ Object ExceptionPacket_asString(Object self, int argc, int *argcv,
 Object ExceptionPacket_printBacktrace(Object self, int argc, int *argcv,
         Object *argv, int flags) {
     printExceptionBacktrace(self);
-    return alloc_none();
+    return alloc_done();
 }
 Object alloc_ExceptionPacket(Object msg, Object exception) {
     if (!ExceptionPacket) {
@@ -2786,16 +2794,16 @@ Object module_sys_init() {
     gc_root(o);
     return o;
 }
-Object alloc_none() {
-    if (none != NULL)
-        return none;
-    None = alloc_class("done", 4);
-    add_Method(None, "==", &Object_Equals);
-    add_Method(None, "!=", &Object_NotEquals);
-    add_Method(None, "asString", &Object_asString);
-    add_Method(None, "asDebugString", &Object_asString);
-    Object o = alloc_obj(0, None);
-    none = o;
+Object alloc_done() {
+    if (done != NULL)
+        return done;
+    Done = alloc_class("done", 4);
+    add_Method(Done, "==", &Object_Equals);
+    add_Method(Done, "!=", &Object_NotEquals);
+    add_Method(Done, "asDebugString", &Singleton_asString);
+    add_Method(Done, "asString", &Singleton_asString);
+    Object o = alloc_obj(0, Done);
+    done = o;
     gc_root(o);
     return o;
 }
@@ -2993,11 +3001,29 @@ start:
     Object originalself = self;
     Object realself = self;
     Method *m = findmethod(&self, &realself, name, superdepth, &callflags);
-    sprintf(callstack[calldepth], "%s%s.%s (defined at %s:%i in object at %s:%i) on line %i", (istail ? "tailcall " : ""),
-            self->class->name, name, m ? m->definitionModule : "<nowhere>",
-            m ? m->definitionLine : 0,
-            originalself->class->definitionModule,
-            originalself->class->definitionLine,
+    char objDesc[256];
+    char methDesc[256];
+    int unknownmodule = originalself->class->definitionModule == NULL
+        ||strcmp(originalself->class->definitionModule, "unknown") == 0;
+    if (originalself->class->definitionLine
+            && !unknownmodule)
+        sprintf(objDesc, " in object at %s:%i",
+                originalself->class->definitionModule,
+                originalself->class->definitionLine);
+    else if (!unknownmodule)
+        sprintf(objDesc, " in %s module",
+                originalself->class->definitionModule);
+    else
+        objDesc[0] = 0;
+    if (m)
+        sprintf(methDesc, "at %s:%i", m->definitionModule,
+                m->definitionLine);
+    else
+        strcpy(methDesc, "nowhere");
+    sprintf(callstack[calldepth], "%s%s.%s (defined %s%s) at %s:%i", (istail ? "tailcall " : ""),
+            self->class->name, name, methDesc,
+            objDesc,
+            modulename,
             linenumber);
     if (track_callgraph && calldepth > 0) {
         char tmp[255];
@@ -3073,9 +3099,16 @@ start:
         longjmp(error_jump, 1);
     }
     fprintf(stderr, "Available methods are:\n");
+    int len = 0;
     for (i=0; i<c->nummethods; i++) {
-        fprintf(stderr, "  %s\n", c->methods[i].name);
+        len += 2 + strlen(c->methods[i].name);
+        if (len > 80) {
+            fprintf(stderr, "\n");
+            len = strlen(c->methods[i].name);
+        }
+        fprintf(stderr, "  %s", c->methods[i].name);
     }
+    fprintf(stderr, "\n");
     die("Method lookup error: no %s in %s.",
             name, self->class->name);
     exit(1);
@@ -3191,7 +3224,7 @@ Object catchCase(Object block, Object *caseList, int ncases,
                 callmethod(finally, "apply", 0, NULL, NULL);
                 finally_stack[start_calldepth] = NULL;
                 exceptionHandlerDepth--;
-                return alloc_none();
+                return alloc_done();
             }
         }
         callmethod(finally, "apply", 0, NULL, NULL);
@@ -3223,7 +3256,7 @@ Object gracelib_print(Object receiver, int nparams,
         char *s = grcstring(o);
         puts(s);
     }
-    return none;
+    return done;
 }
 
 ClassData StackFrame;
@@ -3678,7 +3711,7 @@ Object Block_pattern(Object self, int argc, int *argcv,
         Object *argv, int flags) {
     struct BlockObject *o = (struct BlockObject *)self;
     if (!o->data[1])
-        return none;
+        return done;
     return o->data[1];
 }
 void Block__mark(struct BlockObject *o) {
@@ -3932,7 +3965,7 @@ Object dlmodule(const char *name) {
     }
     void *handle = dlopen(buf, RTLD_LAZY | RTLD_GLOBAL);
     if (!handle)
-        gracedie("failed to load dynamic module '%s'", buf);
+        gracedie("failed to load dynamic module '%s': %s", buf, dlerror());
     strcpy(buf, "module_");
     int new_size = 0;
     char c;
@@ -4214,7 +4247,7 @@ Object grace_while_do(Object self, int nparts, int *argcv,
     while (istrue(callmethod(argv[0], "apply", 0, NULL, NULL))) {
         callmethod(argv[1], "apply", 0, NULL, NULL);
     }
-    return none;
+    return done;
 }
 Object grace_for_do(Object self, int nparts, int *argcv,
         Object *argv, int flags) {
@@ -4230,7 +4263,19 @@ Object grace_for_do(Object self, int nparts, int *argcv,
         gc_frame_setslot(slot, val);
         callmethod(argv[1], "apply", 1, partcv, &val);
     }
-    return none;
+    return done;
+}
+void grace_iterate(Object iterable, void(*callback)(Object, void *),
+        void *userdata) {
+    Object iter = callmethod(iterable, "iter", 0, NULL, NULL);
+    gc_frame_newslot(iter);
+    // Stack slot for argument object
+    int slot = gc_frame_newslot(NULL);
+    int partcv[] = {1};
+    while (istrue(callmethod(iter, "havemore", 0, NULL, NULL))) {
+        Object val = callmethod(iter, "next", 0, NULL, NULL);
+        callback(val, userdata);
+    }
 }
 #define HEXVALC(c) ((c >= '0' && c <= '9') ? c - '0' : ((c >= 'a' && c <= 'f') ? c - 'a' + 10 : -1))
 Object grace_octets(Object self, int npart, int *argcv,
@@ -4293,7 +4338,7 @@ Object minigrace_warranty(Object self, int argc, int *argcv,
     "You should have received a copy of the GNU General Public License\n"
     "along with this program.  If not, see <http://www.gnu.org/licenses/>.\n";
     fprintf(stdout, "%s", w);
-    return none;
+    return done;
 }
 Object minigrace_credits(Object self, int argc, int *argcv,
         Object *argv, int flags) {
@@ -4303,7 +4348,7 @@ Object minigrace_credits(Object self, int argc, int *argcv,
     " * Timothy Jones\n"
     " * Jan Larres\n";
     fprintf(stdout, "%s", w);
-    return none;
+    return done;
 }
 Object grace_minigrace(Object self, int argc, int *argcv,
         Object *argv, int flags) {

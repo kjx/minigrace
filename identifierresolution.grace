@@ -6,11 +6,14 @@ import "util" as util
 import "xmodule" as xmodule
 import "mgcollections" as collections
 import "mirrors" as mirrors
+import "errormessages" as errormessages
 
 class Scope.new(parent') {
     def elements = collections.map.new
     def elementScopes = collections.map.new
     def elementDeclarations = collections.map.new
+    def elementLines = collections.map.new
+    def elementTokens = collections.map.new
     def parent = parent'
     var hasParent := true
     var variety := "block"
@@ -20,6 +23,7 @@ class Scope.new(parent') {
     }
     method add(n)as(k) {
         elements.put(n, k)
+        elementLines.put(n, util.linenum)
     }
     method contains(n) {
         elements.contains(n)
@@ -344,9 +348,38 @@ method resolveIdentifier(node) {
     }
     if (haveBinding(nm).not) then {
         if (node.wildcard) then {
-            util.syntax_error("Unable to resolve wildcard identifier.")
+            errormessages.syntaxError("'_' can only be used as a parameter name")atRange(node.line, node.linePos, node.linePos)
         } else {
-            util.syntax_error("Use of undefined identifier '{nm}'.")
+            def suggestions = []
+            var suggestion
+            for(scope.elements) do { v ->
+                var thresh := 1
+                if (nm.size > 5) then {
+                    thresh := ((nm.size - 2) / 4 + 1).truncate
+                }
+                if(errormessages.dameraulevenshtein(v, nm) <= thresh) then {
+                    suggestion := errormessages.suggestion.new
+                    suggestion.replaceRange(node.linePos, node.linePos + node.value.size - 1)with(v)onLine(node.line)
+                    suggestions.push(suggestion)
+                }
+            }
+
+            for(scope.elementScopes) do { s ->
+                if(scope.elementScopes.get(s).contains(nm)) then {
+                    suggestion := errormessages.suggestion.new
+                    suggestion.insert("{s}.")atPosition(node.linePos)onLine(node.line)
+                    suggestions.push(suggestion)
+                }
+            }
+
+            if (!node.inBind) then {
+                suggestion := errormessages.suggestion.new
+                suggestion.insert("\"")atPosition(node.linePos + node.value.size)onLine(node.line)
+                suggestion.insert("\"")atPosition(node.linePos)onLine(node.line)
+                suggestions.push(suggestion)
+            }
+            errormessages.syntaxError("Unknown variable or method name '{nm}'. This may be due to a spelling mistake or trying to access a variable within another scope.")atRange(
+                node.line, node.linePos, node.linePos + node.value.size - 1)withSuggestions(suggestions)
         }
     }
     if (nm == "outer") then {
@@ -403,7 +436,27 @@ method resolveIdentifiersActual(node) {
         }
         if (node.dest.kind == "identifier") then {
             if (getNameKind(node.dest.value) == "def") then {
-                util.syntax_error "Reassignment to constant '{node.dest.value}'."
+                def name = node.dest.value
+                def scp = getNameScope(name)
+                var more := ""
+                def suggestions = []
+                if (scp.elementLines.contains(name)) then {
+                    more := " on line {scp.elementLines.get(name)}"
+                }
+                if (scp.elementTokens.contains(name)) then {
+                    def tok = scp.elementTokens.get(name)
+                    def sugg = errormessages.suggestion.new
+                    var eq := tok
+                    while {(eq.kind != "op") || (eq.value != "=")} do {
+                        eq := eq.next
+                    }
+                    sugg.replaceToken(eq)with(":=")
+                    sugg.replaceToken(tok)with("var")
+                    suggestions.push(sugg)
+                }
+                errormessages.syntaxError("The value of '{node.dest.value}' cannot be changed because it is a constant. To make it a variable use 'var' instead of 'def' in the declaration{more}.")
+                    atLine(node.line)
+                    withSuggestions(suggestions)
             }
         }
     }
@@ -452,10 +505,37 @@ method checkRedefinition(ident) {
         if (getNameScope(ident.value)
             .elementDeclarations.contains(ident.value)
         ) then {
-            util.setPosition(ident.line, ident.linePos)
-            util.syntax_error "Redeclaration of existing name '{ident.value}'."
+            def scp = getNameScope(ident.value)
+            var more := ""
+            if (scp.elementLines.contains(ident.value)) then {
+                more := " as a {scp.elements.get(ident.value)}"
+                    ++ " on line {scp.elementLines.get(ident.value)}"
+            }
+            if(nk == "def") then {
+                errormessages.syntaxError("'{ident.value}' cannot be "
+                    ++ "redeclared because it is already declared in "
+                    ++ "scope{more}.")
+                    atRange(ident.line, ident.linePos,
+                        ident.linePos + ident.value.size - 1)
+            } else {
+                def suggs = collections.list.new
+                def sugg = errormessages.suggestion.new
+                if (sugg.replaceUntil("=")with("{ident.value} :=")
+                        onLine(ident.line)
+                    ) then {
+                    suggs.push(sugg)
+                }
+                errormessages.syntaxError("'{ident.value}' cannot be "
+                        ++ "redeclared because it is already declared in "
+                        ++ "scope{more}. To assign to the existing variable, "
+                        ++ "remove 'var' or 'def'.")
+                    atRange(ident.line, ident.linePos,
+                        ident.linePos + ident.value.size - 1)
+                    withSuggestions(suggs)
+            }
         }
     }
+    util.setline(ident.line)
     scope.elementDeclarations.put(ident.value, true)
 }
 method resolveIdentifiers(topNode) {
@@ -465,7 +545,7 @@ method resolveIdentifiers(topNode) {
         return topNode
     }
     topNode.map { n -> resolveIdentifiersActual(n) } before { node ->
-        util.setPosition(node.line, 1)
+        util.setline(node.line)
         if (node.kind == "class") then {
             checkRedefinition(node.name)
             scope.add(node.name.value) as "def"
@@ -509,10 +589,15 @@ method resolveIdentifiers(topNode) {
                     for (node.signature) do {s->
                         for (s.params) do {p->
                             if (parentScope.elements.contains(p.value)) then {
-                                util.setPosition(p.line, p.linePos)
-                                util.syntax_error("Class parameter '{p.value}' "
-                                    ++ "conflicts with inherited method "
-                                    ++ "'{p.value}' and must be renamed.")
+                                def suggestion = errormessages.suggestion.new
+                                suggestion.insert("'")atPosition(p.linePos + p.value.size)onLine(p.line)
+                                var primes := "'"
+                                while { scope.elements.contains(p.value ++ primes) || parentScope.elements.contains(p.value ++ primes) } do {
+                                    suggestion.insert("'")atPosition(p.linePos + p.value.size)onLine(p.line)
+                                    primes := primes ++ "'"
+                                }
+                                errormessages.syntaxError("The parameter name '{p.value}' cannot be used because this class inherits a method named '{p.value}'.")atRange(
+                                    p.line, p.linePos, p.linePos + p.value.size - 1)withSuggestion(suggestion)
                             }
                         }
                     }
@@ -610,6 +695,9 @@ method resolveIdentifiers(topNode) {
             if ((scope.variety != "object") && (scope.variety != "class")) then {
                 checkRedefinition(node.name)
                 scope.add(node.name.value)as "def"
+                if (false != node.startToken) then {
+                    scope.elementTokens.put(node.name.value, node.startToken)
+                }
             } else {
                 scope.add(node.name.value)
             }
@@ -733,7 +821,6 @@ method resolve(values) {
     builtinObj.add "_prelude" as "def"
     builtinObj.add "..." as "def"
     // Historical - should be removed eventually
-    builtinObj.add "nothing" as "def"
     if (!util.extensions.contains("NativePrelude")) then {
         var hadDialect := false
         for (values) do {val->

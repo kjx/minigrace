@@ -4,6 +4,7 @@ import "sys" as sys
 import "util" as util
 import "unicode" as unicode
 import "mgcollections" as collections
+import "errormessages" as errormessages
 
 // Return the numeric value of the single hexadecimal character c.
 method hexdecchar(c) {
@@ -37,153 +38,149 @@ def LexerClass = object {
         var startPosition := 1
         var indentLevel := 0
 
+        class Token.new() {
+            def line = lineNumber
+            def indent = indentLevel
+            def linePos = startPosition
+
+            var next := false
+            var prev := false
+
+            method ==(other) {
+                if(other == false) then {
+                    false
+                } else {
+                    (other.line == line) && (other.linePos == linePos)
+                }
+            }
+        }
+
         class IdentifierToken.new(s) {
+            inherits Token.new
             def kind = "identifier"
             def value = s
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = s.size
         }
         class StringToken.new(s) {
+            inherits Token.new
             def kind = "string"
             def value = s
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = s.size + 2
         }
         class CommentToken.new(s) {
+            inherits Token.new
             def kind = "comment"
             def value = s
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = s.size + 2
         }
         class OctetsToken.new(s) {
+            inherits Token.new
             def kind = "octets"
             def value = s
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = s.size + 3
         }
         class LBraceToken.new {
+            inherits Token.new
             def kind = "lbrace"
             def value = "\{"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class RBraceToken.new {
+            inherits Token.new
             def kind = "rbrace"
             def value = "}"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class LParenToken.new {
+            inherits Token.new
             def kind = "lparen"
             def value = "("
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class RParenToken.new {
+            inherits Token.new
             def kind = "rparen"
             def value = ")"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class LSquareToken.new {
+            inherits Token.new
             def kind = "lsquare"
             def value = "["
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class RSquareToken.new {
+            inherits Token.new
             def kind = "rsquare"
             def value = "]"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class CommaToken.new {
+            inherits Token.new
             def kind = "comma"
             def value = ","
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class ColonToken.new {
+            inherits Token.new
             def kind = "colon"
             def value = ":"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class DotToken.new {
+            inherits Token.new
             def kind = "dot"
             def value = "."
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class NumToken.new(v, b) {
+            inherits Token.new
             def kind = "num"
             def value = v
             def base = b
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = linePosition - startPosition
         }
         class KeywordToken.new(v) {
+            inherits Token.new
             def kind = "keyword"
             def value = v
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = v.size
         }
         class OpToken.new(v) {
+            inherits Token.new
             def kind = "op"
             def value = v
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = v.size
         }
         class ArrowToken.new {
+            inherits Token.new
             def kind = "arrow"
             def value = "->"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 2
         }
         class BindToken.new {
+            inherits Token.new
             def kind = "bind"
             def value = ":="
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 2
         }
         class SemicolonToken.new {
+            inherits Token.new
             def kind = "semicolon"
             def value = ";"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class LGenericToken.new {
+            inherits Token.new
             def kind = "lgeneric"
             def value = "<"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
         class RGenericToken.new {
+            inherits Token.new
             def kind = "rgeneric"
             def value = ">"
-            def line = lineNumber
-            def indent = indentLevel
-            def linePos = startPosition
+            def size = 1
         }
 
         object {
@@ -279,7 +276,7 @@ def LexerClass = object {
                         done := true
                     } elseif (mode == "m") then {
                         if ((tokens.size > 1).andAlso {tokens.last.kind == "dot"}) then {
-                            tokens.pop
+                            def dot = tokens.pop
                             if (tokens.last.kind == "num") then {
                                 if (tokens.last.base == 10) then {
                                     tok := tokens.pop
@@ -287,15 +284,55 @@ def LexerClass = object {
                                     if(decimal.base == 10) then {
                                         tok := NumToken.new(tok.value ++ "." ++ accum, 10)
                                     } else {
-                                        util.syntax_error("Fractional part of number must be in base 10.")
+                                        def suggestions = []
+                                        var suggestion := errormessages.suggestion.new
+                                        suggestion.replaceRange(dot.linePos + 1, linePosition - 1)with(decimal.value)onLine(lineNumber)
+                                        suggestions.push(suggestion)
+                                        suggestion := errormessages.suggestion.new
+                                        suggestion.deleteRange(dot.linePos, linePosition - 1)onLine(lineNumber)
+                                        suggestions.push(suggestion)
+                                        errormessages.syntaxError("The fractional part of a number must be in base 10.")atRange(
+                                            lineNumber, dot.linePos + 1, linePosition - 1)withSuggestions(suggestions)
                                     }
                                 } else {
-                                    util.syntax_error("Numbers in base {tokens.last.base} " ++
-                                        "can only be integers.")
+                                    def suggestions = []
+                                    var suggestion := errormessages.suggestion.new
+                                    suggestion.replaceRange(tokens.last.linePos, dot.linePos - 1)with(tokens.last.value)onLine(lineNumber)
+                                    suggestions.push(suggestion)
+                                    suggestion := errormessages.suggestion.new
+                                    suggestion.deleteChar(dot.linePos)onLine(lineNumber)
+                                    suggestions.push(suggestion)
+                                    errormessages.syntaxError("A number in base {tokens.last.base} cannot have a fractional part.")atRange(
+                                        lineNumber, dot.linePos, linePosition - 1)withSuggestions(suggestions)
                                 }
                             } else {
-                                util.syntax_error("Found '.{accum}'" ++
-                                    ", expected term.")
+                                if(tokens.last.kind == "string") then {
+                                    def suggestion = errormessages.suggestion.new
+                                    suggestion.replaceChar(dot.linePos)with("++")onLine(dot.line)
+                                    errormessages.syntaxError("A number may only follow a '.' if there is a number before the '.'. "
+                                        ++ "To join a number to a string, use '++'.")atRange(
+                                        dot.line, dot.linePos, dot.linePos)withSuggestion(suggestion)
+                                } elseif((tokens.last.kind == "op") || (tokens.last.kind == "bind")) then {
+                                    def suggestion = errormessages.suggestion.new
+                                    suggestion.insert("0")atPosition(dot.linePos)onLine(dot.line)
+                                    errormessages.syntaxError("A number must have a digit before the decimal point.")atPosition(
+                                        dot.line, dot.linePos)withSuggestion(suggestion)
+                                } elseif(tokens.last.kind == "identifier") then {
+                                    def suggestions = []
+                                    if(tokens.last.value == "o") then {
+                                        def suggestion = errormessages.suggestion.new
+                                        suggestion.replaceChar(tokens.last.linePos)with("0")onLine(tokens.last.line)
+                                        suggestions.push(suggestion)
+                                    }
+                                    def suggestion = errormessages.suggestion.new
+                                    suggestion.replaceRange(dot.linePos, linePosition - 1)with("({accum})")onLine(tokens.last.line)
+                                    suggestions.push(suggestion)
+                                    errormessages.syntaxError("A number may only follow a '.' if there is a number before the '.'.")atRange(
+                                        dot.line, dot.linePos, dot.linePos)withSuggestions(suggestions)
+                                } else {
+                                    errormessages.syntaxError("A number may only follow a '.' if there is a number before the '.'.")atRange(
+                                        dot.line, dot.linePos, dot.linePos)
+                                }
                             }
                         } else {
                             tok := makeNumToken(accum)
@@ -314,7 +351,7 @@ def LexerClass = object {
                         tokens.push(tok)
                         done := true
                     } elseif (mode == "d") then {
-                        indentLevel := accum.size
+                        indentLevel := linePosition - 1//accum.size
                         done := true
                     } elseif (mode == "n") then {
                         done := true
@@ -330,8 +367,7 @@ def LexerClass = object {
                     } elseif (done) then {
                         //print(mode, accum, tokens)
                     } else {
-                        util.syntax_error("Lexing error: no handler for mode {mode}" ++
-                            " with accum {accum}.")
+                        errormessages.syntaxError("Lexing error: no handler for mode {mode} with accum {accum}.")atPosition(lineNumber, linePosition)
                     }
                 }
                 startPosition := linePosition
@@ -339,6 +375,7 @@ def LexerClass = object {
 
             method fromBase(str, base) {
                 var val := 0
+                var i := 0
                 for (str) do {c->
                     def n = c.ord
                     val := val * base
@@ -351,9 +388,29 @@ def LexerClass = object {
                         inc := n - 87 // 'a' - 10
                     }
                     if (inc >= base) then {
-                        util.syntax_error("No such digit '{c}' in base {base}.")
+                        if((str[1] == "0") && (inc < 16)) then {
+                            def suggestion = errormessages.suggestion.new
+                            suggestion.insert("x")atPosition(linePosition - str.size + 1)onLine(lineNumber)
+                            errormessages.syntaxError("A number in base 16 must start with '0x'.")atPosition(
+                                lineNumber, linePosition - str.size + 1)withSuggestion(suggestion)
+                        } else {
+                            def suggestion = errormessages.suggestion.new
+                            if(str.size == 1) then {
+                                suggestion.deleteRange(linePosition - str.size - 1, linePosition - 1)onLine(lineNumber)
+                            } else {
+                                suggestion.deleteChar(linePosition - str.size + i)onLine(lineNumber)
+                            }
+                            def validDigits = if(base <= 10) then {
+                                "'0' to '{base - 1}'"
+                            } else {
+                                "'0' to '9', 'a' to '{unicode.create(87 + base)}'"
+                            }
+                            errormessages.syntaxError("'{c}' is not a valid digit in base {base}. Valid digits are {validDigits}.")atRange(
+                                lineNumber, linePosition - str.size + i, linePosition - str.size + i)withSuggestion(suggestion)
+                        }
                     }
                     val := val + inc
+                    i := i + 1
                 }
                 val
             }
@@ -361,6 +418,7 @@ def LexerClass = object {
                 var base := 10
                 var baseSet := false
                 var sofar := ""
+                var i := 0
                 for (accum) do {c->
                     if ((c == "x") && (!baseSet)) then {
                         base := sofar.asNumber
@@ -369,15 +427,32 @@ def LexerClass = object {
                             base := 16
                         }
                         if((base < 2) || (base > 36)) then {
-                            util.syntax_error("Invalid base: {base}.")
+                            def suggestions = []
+                            var suggestion := errormessages.suggestion.new
+                            suggestion.replaceChar(linePosition - accum.size + i)with("*")onLine(lineNumber)
+                            suggestions.push(suggestion)
+                            suggestion := errormessages.suggestion.new
+                            suggestion.deleteRange(linePosition - accum.size, linePosition - accum.size + i)onLine(lineNumber)
+                            suggestions.push(suggestion)
+                            errormessages.syntaxError("Base {base} is not a valid numerical base.")atRange(
+                                lineNumber, linePosition - accum.size, linePosition - accum.size + i - 1)withSuggestions(suggestions)
                         }
                         sofar := ""
                     } else {
                         sofar := sofar ++ c
                     }
+                    i := i + 1
                 }
                 if(sofar == "") then {
-                    util.syntax_error("Number required after base.")
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    suggestion.deleteRange(linePosition - accum.size + i - 1, linePosition - 1)onLine(lineNumber)
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.insert("0")atPosition(linePosition)onLine(lineNumber)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("At least one digit must follow the 'x' in a number.")atPosition(
+                        lineNumber, linePosition - accum.size + i)withSuggestions(suggestions)
                 }
                 NumToken.new(fromBase(sofar, base).asString, base)
             }
@@ -385,8 +460,13 @@ def LexerClass = object {
             // characters are Unicode letters, Unicode numbers, apostrophe,
             // and (currently) underscore.
             method isidentifierchar(ov) {
-                if (unicode.isLetter(ov) || unicode.isNumber(ov)
-                    || (ov == 95) || (ov == 39)) then {
+                if (unicode.isLetter(ov)) then {
+                    return true
+                }
+                if (unicode.isNumber(ov)) then {
+                    return true
+                }
+                if ((ov == 95) || (ov == 39)) then {
                     // 95 is _, 39 is '
                     true
                 } else {
@@ -448,7 +528,71 @@ def LexerClass = object {
             }
 
             method lexinput(input) {
-                var tokens := []
+                // tokens is a doubly-linked list of tokens.
+                var tokens := object {
+                    var first := false
+                    var last := false
+                    var size' := 0
+
+                    method push(t) {
+                        if(first == false) then {
+                            first := t
+                            last := t
+                        } else {
+                            last.next := t
+                            t.prev := last
+                            last := t
+                        }
+                        size' := size' + 1
+                    }
+
+                    method pop {
+                        if(last != false) then {
+                            def popped = last
+                            last := last.prev
+                            if(last == false) then {
+                                first := false
+                            }
+                            size' := size' - 1
+                            popped
+                        }
+                    }
+
+                    method poll {
+                        if(first != false) then {
+                            def polled = first
+                            first := first.next
+                            if(first == false) then {
+                                last := false
+                            }
+                            size' := size' - 1
+                            polled
+                        }
+                    }
+
+                    method size {
+                        size' + 0
+                    }
+
+                    method iter {
+                        object {
+                            var n := first
+                            method havemore {
+                                n != false
+                            }
+                            method next {
+                                def ret = n
+                                n := n.next
+                                ret
+                            }
+                        }
+                    }
+
+                    method iterator {
+                        iter
+                    }
+                }
+
                 var mode := "d"
                 var newmode := mode
                 var instr := false
@@ -464,36 +608,100 @@ def LexerClass = object {
                 var atStart := true
                 linePosition := 0
                 util.log_verbose("lexing.")
-                for (input) do { c ->
-                    linePosition := linePosition + 1
-                    util.setPosition(lineNumber, linePosition)
+                def badSeparator = unicode.pattern("Z", 9)not(32, 8232)
+                def badControl =  unicode.pattern("C")not(10, 13)
+                def selfModes = unicode.pattern("(".ord, ")".ord, ",".ord,
+                    ".".ord, "\{".ord, "}".ord, "[".ord, "]".ord, ";".ord)
+                def brackets = unicode.pattern("(".ord, ")".ord,
+                    "\{".ord, "}".ord, "[".ord, "]".ord)
+                def identifierChar = unicode.pattern("L", "N", 95, 39)
+                def digit = unicode.pattern("0".ord, "1".ord, "2".ord, "3".ord,
+                    "4".ord, "5".ord, "6".ord, "7".ord, "8".ord, "9".ord)
+                def digitB = unicode.pattern("0".ord, "1".ord, "2".ord, "3".ord,
+                    "4".ord, "5".ord, "6".ord, "7".ord, "8".ord, "9".ord)
+                def operatorChar = unicode.pattern("Sm", "So",
+                    "-".ord, "&".ord, "|".ord, ":".ord,
+                   "%".ord, "^".ord, "@".ord, "?".ord,
+                   "*".ord, "/".ord, "+".ord, "!".ord
+                    )
+                def iGTLT = unicode.pattern("i".ord, "<".ord, ">".ord)
+                def notcp = unicode.pattern()not("c".ord, "p".ord)
+                def mainBlock = { c->
                     var ct := ""
                     var ordval := c.ord // String.ord gives the codepoint
-                    if ((unicode.isSeparator(ordval) && (ordval != 32) &&
-                        (ordval != 8232)) || (ordval == 9)) then {
+                    if (badSeparator.match(ordval)) then {
                         // Character is whitespace, but not an ASCII space or
                         // Unicode LINE SEPARATOR, or is a tab
-                        util.syntax_error("Illegal whitespace in input: "
-                            ++ "U+{padl(ordval.inBase 16, 4, "0")} "
-                            ++ "({ordval}), {unicode.name(c)}.")
-                    }
-                    if (unicode.isControl(ordval) && (ordval != 10)
-                        && (ordval != 13)) then {
-                        // Character is a control character other than
-                        // carriage return or line feed.
-                        util.syntax_error("Illegal control character in "
-                            ++ "input: U+{padl(ordval.inBase 16, 4, "0")} "
-                            ++ "({ordval}), {unicode.name(c)}.")
-                    }
-                    if (atStart && (linePosition == 1)) then {
-                        if (c == "#") then {
-                            mode := "p"
-                            newmode := mode
+                        def suggestion = errormessages.suggestion.new
+                        suggestion.replaceChar(linePosition)with(" ")onLine(lineNumber)
+                        if(ordval == 9) then {
+                            if (instr) then {
+                                suggestion.replaceRange(linePosition, linePosition)
+                                    with("\\u{padl(ordval.inBase 16, 4, "0")}")
+                                    onLine(lineNumber)
+                                errormessages.syntaxError("tabs cannot be "
+                                    ++ "written in the source code; "
+                                    ++ "use the Unicode escape \\u"
+                                    ++ padl(ordval.inBase 16, 4, "0")
+                                    ++ " instead")
+                                    atRange(lineNumber, linePosition, linePosition)
+                                    withSuggestion(suggestion)
+                            }
+                            errormessages.syntaxError("Tabs are not allowed; use spaces instead.")atRange(lineNumber,
+                                linePosition, linePosition)withSuggestion(suggestion)
                         } else {
-                            atStart := false
+                            if (instr) then {
+                                suggestion.replaceRange(linePosition, linePosition)
+                                    with("\\u{padl(ordval.inBase 16, 4, "0")}")
+                                    onLine(lineNumber)
+                                errormessages.syntaxError("{unicode.name(c)} (U+{padl(ordval.inBase 16, 4, "0")}) "
+                                    ++ "is not a valid whitespace character"
+                                    ++ " and cannot be "
+                                    ++ "written in the source code; "
+                                    ++ "use the Unicode escape \\u"
+                                    ++ padl(ordval.inBase 16, 4, "0")
+                                    ++ " instead")
+                                    atRange(lineNumber, linePosition, linePosition)
+                                    withSuggestion(suggestion)
+                            }
+                            errormessages.syntaxError("{unicode.name(c)} (U+{padl(ordval.inBase 16, 4, "0")}) "
+                                ++ "is not a valid whitespace character; use spaces instead.")atRange(lineNumber,
+                                linePosition, linePosition)withSuggestion(suggestion)
                         }
                     }
-                    if (instr || inBackticks) then {
+                    if (badControl.match(ordval)) then {
+                        // Character is a control character other than
+                        // carriage return or line feed.
+                        def suggestion = errormessages.suggestion.new
+                        if (instr) then {
+                            suggestion.replaceRange(linePosition, linePosition)
+                                with("\\u{padl(ordval.inBase 16, 4, "0")}")
+                                onLine(lineNumber)
+                            errormessages.syntaxError("{unicode.name(c)} (U+{padl(ordval.inBase 16, 4, "0")}) "
+                                ++ "is a control character and cannot be "
+                                ++ "written in the source code; "
+                                ++ "use the Unicode escape \\u"
+                                ++ padl(ordval.inBase 16, 4, "0")
+                                ++ " instead")
+                                atRange(lineNumber, linePosition, linePosition)
+                                withSuggestion(suggestion)
+                        }
+                        suggestion.deleteChar(linePosition)onLine(lineNumber)
+                        errormessages.syntaxError("{unicode.name(c)} (U+{padl(ordval.inBase 16, 4, "0")}) "
+                            ++ "is a control character and cannot be written in the source code; consider using spaces instead.")atRange(lineNumber,
+                            linePosition, linePosition)withSuggestion(suggestion)
+                    }
+                    if (atStart) then {
+                        if (linePosition == 1) then {
+                            if (c == "#") then {
+                                mode := "p"
+                                newmode := mode
+                            } else {
+                                atStart := false
+                            }
+                        }
+                    }
+                    if (instr) then {
 
                     } elseif ((mode != "c") && (mode != "p")) then {
                         // Not in a comment, so look for a mode.
@@ -504,116 +712,138 @@ def LexerClass = object {
                             // Beginning of a string
                             newmode := "\""
                             instr := true
-                            if (prev == "x") then {
-                                // Or, actually of an Octet literal
-                                newmode := "x"
-                                mode := "n"
-                            }
                         }
-                        if (c == "`") then {
-                            newmode := "I"
-                            inBackticks := true
-                        }
-                        ct := isidentifierchar(ordval)
-                        if (ct) then {
+                        if (identifierChar.match(ordval)) then {
                             newmode := "i"
                         }
                         ct := ((ordval >= 48) && (ordval <=57))
-                        if (ct && (mode != "i")) then {
-                            newmode := "m"
+                        if (digit.match(ordval)) then {
+                            if (mode != "i") then {
+                                newmode := "m"
+                            }
                         }
-                        if ((((ordval >= 97) && (ordval <=122)) || ((ordval >= 65) && (ordval <= 90)))  && (mode == "m")) then {
-                            newmode := "m"
+                        if (mode == "m") then {
+                            if ((ordval >= 97) && (ordval <=122)) then {
+                                newmode := "m"
+                            } else {
+                                if ((ordval >= 65) && (ordval <= 90)) then {
+                                    newmode := "m"
+                                }
+                            }
                         }
                         if ((mode == "i") && (c == "<")) then {
                             newmode := "<"
-                        } elseif (((mode == "i") || (mode == ">")
-                            || (mode == "<"))
+                        } elseif (iGTLT.match(mode)
                             && (c == ">")) then {
                             if (mode == ">") then {
                                 modechange(tokens, mode, accum)
                             }
                             newmode := ">"
-                        } elseif (isoperatorchar(c, ordval)) then {
+                        } elseif (operatorChar.match(ordval)) then {
                             newmode := "o"
                         }
-                        if ((c == "(") || (c == ")") || (c == ",") || (c == ".")
-                            || (c == "\{") || (c == "}") || (c == "[")
-                            || (c == "]") || (c == ";")) then {
+                        if (selfModes.match(ordval)) then {
                             newmode := c
                         }
-                        if ((c == "#") && (mode != "p")) then {
-                            util.syntax_error("Illegal operator character in "
-                                ++ "input: U+{padl(ordval.inBase 16, 4, "0")} "
-                                ++ "({ordval}), {unicode.name(c)}.")
-                        }
-                        if ((c == ".") && (accum == ".")) then {
-                            // Special handler for .. operator
-                            mode := "o"
-                            newmode := mode
-                        }
-                        if ((c == "/") && (accum == "/")) then {
-                            // Start of comment
-                            mode := "c"
-                            newmode := mode
-                        }
-                        if ((newmode == mode) && (mode == "n")
-                            && (unicode.isSeparator(ordval).not)
-                            && (unicode.isControl(ordval).not)) then {
-                            if ((unicode.isSeparator(ordval).not)
-                                && (ordval != 10) && (ordval != 13)
-                                && (ordval != 32)) then {
-                                util.syntax_error("Unknown character in "
-                                    ++ "input: #{ordval}"
-                                    ++ " '{c}', {unicode.name(c)}")
+                        if (c == "#") then {
+                            if (mode != "p") then {
+                                if(util.lines.at(lineNumber).substringFrom(1)to(7) == "#pragma") then {
+                                    if(tokens.size == 0) then {
+                                        def suggestion = errormessages.suggestion.new
+                                        suggestion.addLine(1, util.lines.at(lineNumber))
+                                        suggestion.addLine(lineNumber, "")
+                                        errormessages.syntaxError("Pragma directives must be at the start of the file.")atLine(
+                                            lineNumber)withSuggestion(suggestion)
+                                    } else {
+                                        errormessages.syntaxError("Pragma directives must be at the start of the file.")atLine(
+                                            lineNumber)
+                                    }
+                                } else {
+                                    def suggestion = errormessages.suggestion.new
+                                    suggestion.replaceChar(linePosition)with("//")onLine(lineNumber)
+                                    errormessages.syntaxError("'#' is not allowed here. For a comment use '//'.")atRange(
+                                        lineNumber, linePosition, linePosition)withSuggestion(suggestion)
+                                }
                             }
                         }
-                        if ((c == ".") && (accum == "..")) then {
-                            // Special handler for ... identifier
-                            mode := "n"
-                            newmode := mode
-                            modechange(tokens, "i", "...")
-                            accum := ""
+                        if (c == ".") then {
+                            if (accum == ".") then {
+                                // Special handler for .. operator
+                                mode := "o"
+                                newmode := mode
+                            }
+                            if (accum == "..") then {
+                                // Special handler for ... identifier
+                                mode := "n"
+                                newmode := mode
+                                modechange(tokens, "i", "...")
+                                accum := ""
+                            }
+                        }
+                        if (c == "/") then {
+                            if (accum == "/") then {
+                                // Start of comment
+                                mode := "c"
+                                newmode := mode
+                            }
+                        }
+                        if (mode == "n") then {
+                            if (mode == newmode) then {
+                                if (unicode.isSeparator(ordval).not) then {
+                                    if (unicode.isControl(ordval).not) then {
+                                        if (ordval != 10) then {
+                                            if (ordval != 13) then {
+                                                if (ordval != 32) then {
+                                                    if (c != ".") then{
+                                                        errormessages.syntaxError("{unicode.name(c)} (U+{padl(ordval.inBase 16, 4, "0")}) "
+                                                            ++ "is not a valid character; use spaces instead.")atRange(
+                                                            lineNumber, linePosition, linePosition)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                    if ((mode == "x") && (c == "\"") && (escaped.not)) then {
-                        // End of octet literal
-                        newmode := "n"
-                        instr := false
-                    }
-                    if ((mode == "\"") && (c == "\"") && (escaped.not)) then {
-                        // End of string literal
-                        newmode := "n"
-                        instr := false
-                        if (interpString) then {
-                            modechange(tokens, mode, accum)
-                            modechange(tokens, ")", ")")
-                            mode := newmode
-                            interpString := false
+                    if (mode == "\"") then {
+                        if (c == "\"") then {
+                            if (escaped.not) then {
+                                // End of string literal
+                                newmode := "n"
+                                instr := false
+                                if (interpString) then {
+                                    modechange(tokens, mode, accum)
+                                    modechange(tokens, ")", ")")
+                                    mode := newmode
+                                    interpString := false
+                                }
+                            }
                         }
-                    }
-                    if ((mode == "I") && (inBackticks) && (c == "`")) then {
-                        // End of backticked identifier
-                        newmode := "n"
-                        inBackticks := false
-                        backtickIdent := true
                     }
                     if (newmode != mode) then {
                         // This character is the beginning of a different
                         // lexical mode - process the old one now.
                         modechange(tokens, mode, accum)
-                        if ((newmode == "}") && (interpdepth > 0)) then {
-                            if (prev == "\{") then {
-                                util.syntax_error("Empty expression in interpolated block.")
+                        if (interpdepth > 0) then {
+                            if (newmode == "}") then {
+                                // Find the position of the opening brace to check in the interpolation is empty.
+                                if (util.lines.at(tokens.last.line)[tokens.last.linePos] == "\{") then {
+                                    def suggestion = errormessages.suggestion.new
+                                    suggestion.deleteRange(linePosition - 1, linePosition)onLine(lineNumber)
+                                    errormessages.syntaxError("A string interpolation cannot be empty.")atRange(
+                                        lineNumber, tokens.last.linePos, linePosition)withSuggestion(suggestion)
+                                }
+                                modechange(tokens, ")", ")")
+                                modechange(tokens, "o", "++")
+                                newmode := "\""
+                                instr := true
+                                interpdepth := interpdepth - 1
                             }
-                            modechange(tokens, ")", ")")
-                            modechange(tokens, "o", "++")
-                            newmode := "\""
-                            instr := true
-                            interpdepth := interpdepth - 1
                         }
                         mode := newmode
-                        if (instr || inBackticks) then {
+                        if (instr) then {
                             // String accum should skip the opening quote, but
                             // other modes' should include their first
                             // character.
@@ -621,23 +851,77 @@ def LexerClass = object {
                         } else {
                             accum := c
                         }
-                        if ((mode == "(") || (mode == ")") || (mode == "[")
-                            || (mode == "]") || (mode == "\{")
-                            || (mode == "}")) then {
+                        if (brackets.match(mode)) then {
                             modechange(tokens, mode, accum)
                             mode := "n"
                             newmode := "n"
                             accum := ""
                         }
-                        backtickIdent := false
                     } elseif (instr) then {
                         if (c == "\n") then {
                             if (interpdepth > 0) then {
-                                util.syntax_error("Runaway string "
-                                    ++ "interpolation.")
+                                // Find closest {.
+                                var line := lineNumber
+                                var i := util.lines.at(line).size
+                                while { util.lines.at(line)[i] != "\{" } do {
+                                    i := i - 1
+                                    if(i == 0) then {
+                                        lineNumber := line - 1
+                                        i := util.lines.at(line).size
+                                    }
+                                }
+                                def suggestions = []
+                                var suggestion := errormessages.suggestion.new
+                                suggestion.insert("\\")atPosition(i)onLine(line)
+                                suggestions.push(suggestion)
+                                if((line == lineNumber) && (i == (linePosition - 2))) then {
+                                    errormessages.syntaxError("For a '\{' character in a string use '\\\{'.")atPosition(
+                                        line, i)withSuggestions(suggestions)
+                                } else {
+                                    suggestion := errormessages.suggestion.new
+                                    suggestion.insert("}")atPosition(linePosition - accum.size - 1)onLine(lineNumber)
+                                    suggestions.push(suggestion)
+                                    errormessages.syntaxError("A string interpolation must end with a '}'. For a '\{' character in a string use '\\\{'.")atPosition(
+                                        lineNumber, linePosition - accum.size - 1)withSuggestions(suggestions)
+                                }
                             } else {
-                                util.syntax_error("Newlines not permitted "
-                                    ++ "in string literals.")
+                                def errorLine = util.lines.at(lineNumber)
+                                def nextLine = if(util.lines.size >= (lineNumber + 1)) then {
+                                    util.lines.at(lineNumber + 1)
+                                } else {
+                                    ""
+                                }
+                                // Count the number of literal quotes in the next line.
+                                var i := 1
+                                var count := 0
+                                while { i <= nextLine.size } do {
+                                    if(nextLine[i] == "\"") then { count := count + 1 }
+                                    elseif(nextLine[i] == "\\") then { i := i + 1 }
+                                    i := i + 1
+                                }
+                                if ((count % 2) == 1) then {
+                                    def suggestions = []
+                                    var suggestion := errormessages.suggestion.new
+                                    suggestion.addLine(lineNumber, errorLine ++ nextLine)
+                                    suggestion.addLine(lineNumber + 1, "")
+                                    suggestions.push(suggestion)
+                                    suggestion := errormessages.suggestion.new
+                                    suggestion.addLine(lineNumber, errorLine ++ "\"")
+                                    suggestion.addLine(lineNumber + 1, "    ++ \"" ++ nextLine)
+                                    suggestions.push(suggestion)
+                                    suggestion := errormessages.suggestion.new
+                                    suggestion.addLine(lineNumber, errorLine ++ "\\n" ++ nextLine)
+                                    suggestion.addLine(lineNumber + 1, "")
+                                    suggestions.push(suggestion)
+                                    errormessages.syntaxError("A string must end with a '\"'. To insert a newline in a string use '\\n'. "
+                                        ++ "To split a string over multiple lines use '++' to join strings together.")atRange(
+                                        lineNumber, linePosition, linePosition)withSuggestions(suggestions)
+                                } else {
+                                    def suggestion = errormessages.suggestion.new
+                                    suggestion.addLine(lineNumber, errorLine ++ "\"")
+                                    errormessages.syntaxError("A string must end with a '\"'.")atPosition(
+                                        lineNumber, linePosition)withSuggestion(suggestion)
+                                }
                             }
                         }
                         if (escaped) then {
@@ -710,12 +994,6 @@ def LexerClass = object {
                         } else {
                             accum := accum ++ c
                         }
-                    } elseif (inBackticks) then {
-                        if (c == "\n") then {
-                            util.syntax_error("Newlines not permitted in"
-                                ++ " backtick identifiers.")
-                        }
-                        accum := accum ++ c
                     } elseif ((c == "\n") || (c == "\r")) then {
                         // Linebreaks terminate any open tokens
                         modechange(tokens, mode, accum)
@@ -725,11 +1003,13 @@ def LexerClass = object {
                     } else {
                         accum := accum ++ c
                     }
-                    if ((accum == "...") && {mode == "o"}) then {
+                    if (accum == "...") then {
+                        if (mode == "o") then {
                             modechange(tokens, "i", "...")
                             newmode := "n"
                             mode := newmode
                             accum := ""
+                        }
                     }
                     if (c == "\n") then {
                         // Linebreaks increment the line counter and insert a
@@ -739,14 +1019,33 @@ def LexerClass = object {
                         lineNumber := lineNumber + 1
                         linePosition := 0
                         startPosition := 1
-                        util.setPosition(lineNumber, 0)
+                    }
+                }
+                for (input) do { c ->
+                    linePosition := linePosition + 1
+                    if (c == " ") then {
+                        if (mode == "d") then {
+                        } else {
+                            if (mode != "n") then {
+                                mainBlock.apply(c)
+                            }
+                        }
+                    } else {
+                        mainBlock.apply(c)
                     }
                     prev := c
                 }
-                if ((mode == "\"") && instr) then {
-                    util.syntax_error("Unfinished string literal, expected '\"'.")
-                } elseif ((mode == "x") && instr) then {
-                    util.syntax_error("Unfinished octets literal, expected '\"'.")
+                linePosition := linePosition + 1
+                if (instr) then {
+                    if (mode == "\"") then {
+                        def suggestion = errormessages.suggestion.new
+                        suggestion.addLine(lineNumber, util.lines.at(lineNumber) ++ "\"")
+                        errormessages.syntaxError("A string must end with a '\"'.")atPosition(
+                            lineNumber, linePosition)withSuggestion(suggestion)
+                    }
+                    if (mode == "x") then {
+                        errormessages.syntaxError("Unfinished octets literal, expected '\"'.")atPosition(lineNumber, linePosition)
+                    }
                 }
                 modechange(tokens, mode, accum)
                 tokens

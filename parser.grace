@@ -3,7 +3,9 @@ import "io" as io
 import "ast" as ast
 import "util" as util
 import "mgcollections" as collections
+import "errormessages" as errormessages
 
+def don'tBreak = true
 var lastline := 0
 var linenum := 0
 var lastIndent := 0
@@ -11,7 +13,7 @@ var indentFreePass := false
 var minIndentLevel := 0
 var statementIndent := 0
 var statementToken
-var tokens := 0
+var tokens := false
 var values := []
 var auto_count := 0
 var don'tTakeBlock := false
@@ -28,6 +30,7 @@ var lastToken := object {
     var linePos := 0
     var indent := 0
     var value := ""
+    def size = 0
 }
 
 var comment := false
@@ -39,12 +42,12 @@ method next {
     if (tokens.size > 0) then {
         lastline := linenum
         lastIndent := sym.indent
-        sym := tokens.pop
+        sym := tokens.poll
         if (sym.kind == "comment") then {
             comment := ""
             while {(sym.kind == "comment").andAlso {tokens.size > 0}} do {
                 comment := comment ++ sym.value
-                sym := tokens.pop
+                sym := tokens.poll
             }
         }
         linenum := sym.line
@@ -56,8 +59,99 @@ method next {
             var linePos := util.lines[lastToken.line].size + 1
             var indent := 0
             var value := ""
+            def size = 0
         }
     }
+}
+
+// Search for the next token that the given block returns true for.
+// Used for generating suggestions.
+method findNextToken(tokenMatcher) {
+    if(tokenMatcher.apply(sym)) then {
+        return sym
+    }
+    var nextTok := false
+    var n := sym
+    while {(n != false).andAlso { nextTok == false }.andAlso { n.indent >= lastToken.indent }} do {
+        if(tokenMatcher.apply(n)) then {
+            nextTok := n
+        }
+        n := n.next
+    }
+    nextTok
+}
+
+method findNextTokenIndentedAt(tok) {
+    if(((sym.line > tok.line) && (sym.indent <= tok.indent)) || (sym.kind == "eof")) then {
+        return sym
+    }
+    var nextTok := false
+    var n := sym
+    while {(n != false).andAlso { nextTok == false }} do {
+        if(((n.line > tok.line) && (n.indent <= tok.indent)) || (sym.kind == "eof")) then {
+            nextTok := n
+        }
+        n := n.next
+    }
+    nextTok
+}
+
+method findNextValidToken(*validFollowTokens) {
+    // Tokens that cannot start an expression.
+    def invalidTokens = ["dot", "comma", "colon", "rparen", "rbrace", "rsquare", "arrow", "bind"];
+    var validToken := sym
+    while {validToken.kind != "eof"} do {
+        // If the token is a valid follow token, then return that token.
+        if(validFollowTokens.contains(validToken.kind)) then {
+            return validToken
+        }
+        // If the token is not an invalid token for starting an expression, return that token.
+        if(!invalidTokens.contains(validToken.kind)) then {
+            return validToken
+        }
+        // The token is invalid, go to the next one.
+        validToken := validToken.next
+    }
+    return validToken
+}
+
+// Finds the closing brace for a given token (that is the beginning of a control
+// structure with an opening brace. Returns an object with two fields: found
+// and tok. If a closing brace is found, found is set to true, and tok is set to
+// the closing brace. Otherwise found is set to false, and tok is set to the
+// token that the closing brace should appear after.
+method findClosingBrace(tok, inserted) {
+    var n := sym
+    var numOpening := if(inserted) then {1} else {0}
+    var numClosing := 0
+    def result = object {
+        var found
+        var tok
+    }
+    // Skip all tokens on the same line first.
+    while {(n.kind != "eof") && (n.line == tok.line)} do {
+        if(n.kind == "lbrace") then { numOpening := numOpening + 1 }
+        elseif(n.kind == "rbrace") then { numClosing := numClosing + 1 }
+        n := n.next
+    }
+    // Skip all tokens that have greater indent than the target closing brace.
+    while {(n.kind != "eof") && (n.indent > tok.indent)} do {
+        if(n.kind == "lbrace") then { numOpening := numOpening + 1 }
+        elseif(n.kind == "rbrace") then { numClosing := numClosing + 1 }
+        n := n.next
+    }
+    if(n.kind == "rbrace") then {
+        result.found := true
+        result.tok := n
+    } elseif((n.prev.kind == "rbrace") && (numOpening == numClosing)) then {
+        // Check that the number of opening and closing braces matches.
+        result.found := true
+        result.tok := n.prev
+    } else {
+        result.found := false
+        result.tok := n.prev
+    }
+    result
 }
 
 // True if the current token (next to be processed) is a t, where
@@ -90,54 +184,11 @@ method accept(t)onLineOfLastOr(other) {
 method tokenOnSameLine {
     (lastline == sym.line) || (sym.indent > lastIndent)
 }
-// Require a t as the current token; if not, raise a syntax error.
-method expect(t) {
-    if (sym.kind == t) then {
-        return true
-    }
-    util.setPosition(sym.line, sym.linePos)
-    util.syntax_error("Expected {t}, got {sym.kind}: '{sym.value}'.")
-}
-// Require a t OR s as the current token; if not, raise a syntax error.
-method expect(t)or(s) {
-    if (sym.kind == t) then {
-        return true
-    }
-    if (sym.kind == s) then {
-        return true
-    }
-    util.setPosition(sym.line, sym.linePos)
-    util.syntax_error("Expected {t} or {s}, got {sym.kind}: '{sym.value}'.")
-}
-// Require a t OR s OR u as the current token; if not, raise a syntax error.
-method expect(t)or(s)or(u) {
-    if (sym.kind == t) then {
-        return true
-    } elseif (sym.kind == s) then {
-        return true
-    } elseif (sym.kind == u) then {
-        return true
-    }
-    util.setPosition(sym.line, sym.linePos)
-    util.syntax_error("Expected {t} or {s} or {u}, got {sym.kind}: '{sym.value}'.")
-}
-// Expect block to consume at least one token
-method expectConsume(ablock) {
+// Check if block did consume at least one token.
+method didConsume(ablock) {
     var sz := tokens.size
     ablock.apply
-    if (tokens.size == sz) then {
-        util.setPosition(sym.line, sym.linePos)
-        util.syntax_error("Unable to consume token: {sym.kind}: '{sym.value}'.")
-    }
-}
-// Expect block to consume at least one token, or report string error
-method expectConsume(ablock)error(msg) {
-    var sz := tokens.size
-    ablock.apply
-    if (tokens.size == sz) then {
-        util.setPosition(sym.line, sym.linePos)
-        util.syntax_error("Unable to consume token: {msg}.")
-    }
+    tokens.size != sz
 }
 // Expect block to consume at least one token, or call fallback code.
 method ifConsume(ablock)then(tblock) {
@@ -187,8 +238,13 @@ method checkAnnotation(ann) {
         for (ann.with) do {p->
             for (p.args) do {a->
                 if ((a.kind == "identifier").andAlso {a.dtype != false}) then {
-                    util.setPosition(a.line, a.linePos)
-                    util.syntax_error("Type given on argument to annotation.")
+                    var tok := sym
+                    // Look back from the current token to try and find the tokens that cause this error.
+                    while {tok.value != ":"} do { tok := tok.prev }
+                    def suggestion = errormessages.suggestion.new
+                    suggestion.deleteTokenRange(tok, tok.next)leading(true)trailing(false)
+                    errormessages.syntaxError("An argument to an annotation cannot have a type.")atRange(
+                        tok.line, tok.linePos, tok.next.linePos + tok.next.size - 1)withSuggestion(suggestion)
                 }
             }
         }
@@ -202,11 +258,41 @@ method doannotation {
     next
     def anns = collections.list.new
     don'tTakeBlock := true
-    expectConsume {expression}
+    if(didConsume({expression}).not) then {
+        def suggestions = []
+        var suggestion := errormessages.suggestion.new
+        def nextTok = findNextValidToken("bind")
+        if(nextTok == sym) then {
+            suggestion.insert(" «annotation»")afterToken(lastToken)
+        } else {
+            suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «annotation»")
+        }
+        suggestions.push(suggestion)
+        suggestion := errormessages.suggestion.new
+        suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+        suggestions.push(suggestion)
+        errormessages.syntaxError("One or more annotations separated by commas must follow 'is'.")atPosition(
+            lastToken.line, lastToken.linePos + lastToken.size + 1)withSuggestions(suggestions)
+    }
     while {accept("comma")} do {
         anns.push(checkAnnotation(values.pop))
         next
-        expectConsume {expression}
+        if(didConsume({expression}).not) then {
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            def nextTok = findNextValidToken("bind")
+            if(nextTok == sym) then {
+                suggestion.insert(" «annotation»")afterToken(lastToken)
+            } else {
+                suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «annotation»")
+            }
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+            suggestions.push(suggestion)
+            errormessages.syntaxError("One or more annotations separated by commas must follow 'is'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size + 1)withSuggestions(suggestions)
+        }
     }
     don'tTakeBlock := false
     anns.push(checkAnnotation(values.pop))
@@ -242,15 +328,37 @@ method dotyperef {
     var tp := false
     var op := false
     def unionTypes = []
-    expectConsume {dotypeterm}
+    if(didConsume({dotypeterm}).not) then {
+        def suggestions = []
+        var suggestion := errormessages.suggestion.new
+        suggestion.insert(" «type name»")afterToken(lastToken)
+        suggestions.push(suggestion)
+        suggestion := errormessages.suggestion.new
+        suggestion.deleteToken(lastToken)
+        suggestions.push(suggestion)
+        suggestion := errormessages.suggestion.new
+        suggestion.replaceToken(lastToken)with(":=")
+        suggestions.push(suggestion)
+        errormessages.syntaxError("A type name or type expression must follow ':'.")atPosition(
+            sym.line, sym.linePos)withSuggestions(suggestions)
+    }
     overallType := values.pop
     while {acceptSameLine("op") && (sym.value == "|")} do {
         if (unionTypes.size == 0) then {
             unionTypes.push(overallType)
         }
         next
-        expectConsume {dotypeterm}
-        unionTypes.push(values.pop)
+        if(didConsume({dotypeterm}).not) then {
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            suggestion.insert(" «type name»")afterToken(lastToken)
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            suggestion.deleteToken(lastToken)
+            suggestions.push(suggestion)
+            errormessages.syntaxError("A type name or type expression must follow '|'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
+        }
     }
     if (unionTypes.size > 0) then {
         var unionName := "Union<"
@@ -269,7 +377,17 @@ method dotyperef {
             intersectionTypes.push(overallType)
         }
         next
-        expectConsume {dotypeterm}
+        if(didConsume({dotypeterm}).not) then {
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            suggestion.insert(" «type name»")afterToken(lastToken)
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            suggestion.deleteToken(lastToken)
+            suggestions.push(suggestion)
+            errormessages.syntaxError("A type name or type expression must follow '&'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
+        }
         intersectionTypes.push(values.pop)
     }
     if (intersectionTypes.size > 0) then {
@@ -301,7 +419,6 @@ method block {
         var havearrow := true
         var found := false
         var i := 0
-        var toks := tokens
         var isMatchingBlock := false
         statementToken := sym
         if (sym.kind == "lparen") then {
@@ -316,7 +433,22 @@ method block {
                     // patterns, where T may be "Pair(hd, tl)" or similar.
                     next
                     braceIsType := true
-                    expectConsume {expression}
+                    if(didConsume({expression}).not) then {
+                        def suggestions = []
+                        var suggestion := errormessages.suggestion.new
+                        def nextTok = findNextValidToken("arrow", "rbrace")
+                        if(nextTok == sym) then {
+                            suggestion.insert(" «expression»")afterToken(lastToken)
+                        } else {
+                            suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                        }
+                        suggestions.push(suggestion)
+                        suggestion := errormessages.suggestion.new
+                        suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                        suggestions.push(suggestion)
+                        errormessages.syntaxError("A block must have an expression after the ':'.")atPosition(
+                            sym.line, sym.linePos)withSuggestions(suggestions)
+                    }
                     braceIsType := false
                     ident1.dtype := values.pop
                 }
@@ -325,8 +457,19 @@ method block {
                     isMatchingBlock := true
                 }
                 if (isMatchingBlock && {accept("comma")}) then {
-                    util.syntax_error("Matching blocks can have only "
-                        ++ "one parameter.")
+                    def suggestions = []
+                    var suggestion
+                    def arrow = findNextToken({ t -> t.kind == "arrow" })
+                    if(arrow != false) then {
+                        suggestion := errormessages.suggestion.new
+                        suggestion.deleteTokenRange(sym, arrow.prev)
+                        suggestions.push(suggestion)
+                    }
+                    suggestion := errormessages.suggestion.new
+                    suggestion.replaceToken(sym)leading(true)trailing(false)with(" |")
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A matching block may only have one parameter.")atRange(
+                        sym.line, sym.linePos, sym.linePos)withSuggestions(suggestions)
                 }
                 while {accept("comma")} do {
                     // Keep doing the above for the rest of the parameters.
@@ -341,7 +484,14 @@ method block {
                     params.push(ident1)
                 }
                 if ((accept("arrow")).not) then {
-                    util.syntax_error("Block parameter list not terminated with '->'.")
+                    def suggestion = errormessages.suggestion.new
+                    if((sym.kind == "bind") || (sym.value == "=")) then {
+                        suggestion.replaceToken(sym)with("->")
+                    } else {
+                        suggestion.insert(" ->")afterToken(lastToken)
+                    }
+                    errormessages.syntaxError("A block must have one or more parameters followed by '->' and an expression.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
                 }
                 next
             } elseif (accept("semicolon")) then {
@@ -359,7 +509,22 @@ method block {
                 && accept("bind")) then {
                 var lhs := values.pop
                 next
-                expectConsume {expression}
+                if(didConsume({expression}).not) then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    def nextTok = findNextValidToken("rbrace")
+                    if(nextTok == sym) then {
+                        suggestion.insert(" «expression»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                    }
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A valid expression must follow ':='.")atPosition(
+                        sym.line, sym.linePos)withSuggestions(suggestions)
+                }
                 var rhs := values.pop
                 body.push(ast.bindNode.new(lhs, rhs))
                 if (accept("semicolon")) then {
@@ -384,14 +549,18 @@ method block {
         }
         while {(accept("rbrace")).not} do {
             // Take the body of the block
-            expectConsume {statement}
+            if(didConsume({statement}).not) then {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert("}")afterToken(lastToken)
+                errormessages.syntaxError("A block must end with a '}'.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
+            }
             tmp := values.pop
             body.push(tmp)
         }
         minIndentLevel := minInd - 1
         statementIndent := startIndent
         next
-        util.setPosition(btok.line, btok.linePos)
         var o := ast.blockNode.new(params, body)
         if (isMatchingBlock) then {
             if (params.size > 0) then {
@@ -409,10 +578,70 @@ method doif {
     if (accept("identifier") && (sym.value == "if")) then {
         def btok = sym
         next
-        expect "lparen"
+        if(sym.kind != "lparen") then {
+            def suggestion = errormessages.suggestion.new
+            // Look ahead for a rparen or then.
+            def nextTok = findNextToken({ t -> (t.line == btok.line)
+                && ((t.kind == "rparen") || (t.kind == "lbrace")
+                || ((t.kind == "identifier") && (t.value == "then"))) })
+            if(nextTok == false) then {
+                suggestion.insert(" («expression») then \{")afterToken(btok)
+            } elseif(nextTok.kind == "rparen") then {
+                if(nextTok == sym) then {
+                    suggestion.insert("(«expression»")beforeToken(sym)
+                } else {
+                    suggestion.insert("(")beforeToken(sym)
+                }
+            } elseif(nextTok.kind == "lbrace") then {
+                if(nextTok == sym) then {
+                    suggestion.insert(" («expression») then")afterToken(btok)
+                } else {
+                    suggestion.insert("(")beforeToken(sym)
+                    suggestion.insert(") then")afterToken(nextTok.prev)andTrailingSpace(true)
+                }
+            } elseif(nextTok.kind == "identifier") then {
+                if(nextTok == sym) then {
+                    suggestion.insert("(«expression») ")beforeToken(sym)
+                } else {
+                    suggestion.insert("(")beforeToken(sym)
+                    suggestion.insert(")")afterToken(nextTok.prev)andTrailingSpace(true)
+                }
+            }
+            errormessages.syntaxError("An if statement must have an expression in parentheses after the 'if'.")atPosition(
+                sym.line, sym.linePos)withSuggestion(suggestion)
+        }
         next
-        expectConsume {expression}
-        expect "rparen"
+        if(didConsume({expression}).not) then {
+            def suggestion = errormessages.suggestion.new
+            // Look ahead for a rparen.
+            var nextTok := findNextToken({ t -> (t.line == lastToken.line) && (t.kind == "rparen") })
+            if(nextTok == false) then {
+                nextTok := findNextValidToken("rparen")
+                if(nextTok == sym) then {
+                    suggestion.insert("«expression») then \{")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression») then \{")
+                }
+                errormessages.syntaxError("An if statement must have an expression in parentheses after the 'if'.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
+            } else {
+                if(nextTok == sym) then {
+                    suggestion.insert("«expression»")afterToken(lastToken)
+                    errormessages.syntaxError("An if statement must have an expression in parentheses after the 'if'.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(false)trailing(true)with("«expression»")
+                    errormessages.syntaxError("An if statement must have an expression in parentheses after the 'if'.")atRange(
+                        sym.line, sym.linePos, nextTok.linePos - 1)withSuggestion(suggestion)
+                }
+            }
+        }
+        if(sym.kind != "rparen") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(")")afterToken(lastToken)
+            errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
         next
         var cond := values.pop
         var body := []
@@ -431,7 +660,22 @@ method doif {
         var minInd := statementIndent + 1
         if (accept("identifier") && (sym.value == "then")) then {
             next
-            expect "lbrace"
+            if(sym.kind != "lbrace") then {
+                def suggestion = errormessages.suggestion.new
+                def closingBrace = findClosingBrace(btok, true)
+                if(closingBrace.found == false) then {
+                    if(closingBrace.tok == lastToken) then {
+                        suggestion.replaceToken(lastToken)leading(false)trailing(true)with("then \{}")
+                    } else {
+                        suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                        suggestion.replaceToken(lastToken)leading(false)trailing(true)with("then \{")
+                    }
+                } else {
+                    suggestion.replaceToken(lastToken)leading(false)trailing(true)with("then \{")
+                }
+                errormessages.syntaxError("An if statement must have a '\{' after the 'then'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
             next
             if (sym.line == lastToken.line) then {
                 minIndentLevel := sym.linePos - 1
@@ -439,7 +683,20 @@ method doif {
                 minIndentLevel := minInd
             }
             while {(accept("rbrace")).not} do {
-                expectConsume {statement}
+                if(didConsume({statement}).not) then {
+                    def suggestion = errormessages.suggestion.new
+                    def closingBrace = findClosingBrace(btok, false)
+                    if(closingBrace.found == false) then {
+                        if(closingBrace.tok == lastToken) then {
+                            suggestion.insert("}")afterToken(lastToken)
+                        } else {
+                            suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                        }
+                    }
+                    suggestion.deleteToken(sym)
+                    errormessages.syntaxError("An if statement must end with a '}'.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
+                }
                 v := values.pop
                 body.push(v)
             }
@@ -453,20 +710,122 @@ method doif {
                 // "elseifs", turning them into ifs inside the else.
                 statementToken := sym
                 next
-                expect "lparen"
+                if(sym.kind != "lparen") then {
+                    def suggestion = errormessages.suggestion.new
+                    // Look ahead for a rparen or then.
+                    def nextTok = findNextToken({ t -> (t.line == statementToken.line)
+                        && ((t.kind == "rparen") || (t.kind == "lbrace")
+                        || ((t.kind == "identifier") && (t.value == "then"))) })
+                    if(nextTok == false) then {
+                        suggestion.insert(" («expression») then \{")afterToken(statementToken)
+                    } elseif(nextTok.kind == "rparen") then {
+                        if(nextTok == sym) then {
+                            suggestion.insert("(«expression»")beforeToken(sym)
+                        } else {
+                            suggestion.insert("(")beforeToken(sym)
+                        }
+                    } elseif(nextTok.kind == "lbrace") then {
+                        if(nextTok == sym) then {
+                            suggestion.insert(" («expression») then")afterToken(statementToken)
+                        } else {
+                            suggestion.insert("(")beforeToken(sym)
+                            suggestion.insert(") then")afterToken(nextTok.prev)andTrailingSpace(true)
+                        }
+                    } elseif(nextTok.kind == "identifier") then {
+                        if(nextTok == sym) then {
+                            suggestion.insert("(«expression») ")beforeToken(sym)
+                        } else {
+                            suggestion.insert("(")beforeToken(sym)
+                            suggestion.insert(")")afterToken(nextTok.prev)andTrailingSpace(true)
+                        }
+                    }
+                    errormessages.syntaxError("An elseif statement must have an expression in parentheses after the 'elseif'.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
+                }
                 next
-                expectConsume {expression}
-                expect "rparen"
+                if(didConsume({expression}).not) then {
+                    def suggestion = errormessages.suggestion.new
+                    // Look ahead for a rparen or then.
+                    var nextTok := findNextToken({ t -> (t.line == lastToken.line) && (t.kind == "rparen") })
+                    if(nextTok == false) then {
+                        nextTok := findNextValidToken("rparen")
+                        if(nextTok == sym) then {
+                            suggestion.insert("«expression») then \{")afterToken(lastToken)
+                        } else {
+                            suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression») then \{")
+                        }
+                        errormessages.syntaxError("An elseif statement must have an expression in parentheses after the 'elseif'.")atPosition(
+                            sym.line, sym.linePos)withSuggestion(suggestion)
+                    } else {
+                        if(nextTok == sym) then {
+                            suggestion.insert("«expression»")afterToken(lastToken)
+                            errormessages.syntaxError("An elseif statement must have an expression in parentheses after the 'elseif'.")atPosition(
+                                sym.line, sym.linePos)withSuggestion(suggestion)
+                        } else {
+                            //checkInvalidExpression
+                            suggestion.replaceTokenRange(sym, nextTok.prev)leading(false)trailing(true)with("«expression»")
+                            errormessages.syntaxError("An elseif statement must have an expression in parentheses after the 'elseif'.")atRange(
+                                sym.line, sym.linePos, nextTok.linePos - 1)withSuggestion(suggestion)
+                        }
+                    }
+                }
+                if(sym.kind != "rparen") then {
+                    def suggestion = errormessages.suggestion.new
+                    suggestion.insert(")")afterToken(lastToken)
+                    errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+                }
                 next
                 econd := values.pop
                 if ((accept("identifier") &&
-                    (sym.value == "then")).not) then {
-                    util.syntax_error("'elseif' with no 'then'.")
+                    (sym.value == "then"))) then {
+                    next
+                    ebody := []
+                } else {
+                    def suggestion = errormessages.suggestion.new
+                    if(sym.kind == "lbrace") then {
+                        def closingBrace = findClosingBrace(statementToken, false)
+                        if(closingBrace.found == false) then {
+                            if(closingBrace.tok == sym) then {
+                                suggestion.replaceToken(sym)leading(true)trailing(false)with(" then \{}")
+                            } else {
+                                suggestion.replaceToken(sym)leading(true)trailing(false)with(" then \{")
+                                suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                            }
+                        } else {
+                            suggestion.replaceToken(sym)leading(true)trailing(false)with(" then \{")
+                        }
+                    } else {
+                        def closingBrace = findClosingBrace(statementToken, true)
+                        if(closingBrace.found == false) then {
+                            if(closingBrace.tok == lastToken) then {
+                                suggestion.insert(" then \{}")afterToken(lastToken)
+                            } else {
+                                suggestion.insert(" then \{")afterToken(lastToken)
+                                suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                            }
+                        } else {
+                            suggestion.insert(" then \{")afterToken(lastToken)
+                        }
+                    }
+                    errormessages.syntaxError("An elseif statement must have 'then' after the expression in parentheses.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
                 }
-                next
-                ebody := []
-                if ((accept("lbrace")).not) then {
-                    util.syntax_error("Expected '\{'.")
+                if(sym.kind != "lbrace") then {
+                    def suggestion = errormessages.suggestion.new
+                    def closingBrace = findClosingBrace(btok, true)
+                    if(closingBrace.found == false) then {
+                        if(closingBrace.tok == lastToken) then {
+                            suggestion.replaceToken(lastToken)leading(false)trailing(true)with("then \{}")
+                        } else {
+                            suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                            suggestion.replaceToken(lastToken)leading(false)trailing(true)with("then \{")
+                        }
+                    } else {
+                        suggestion.replaceToken(lastToken)leading(false)trailing(true)with("then \{")
+                    }
+                    errormessages.syntaxError("An elseif statement must have a '\{' after the 'then'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
                 }
                 next
                 if (sym.line == lastToken.line) then {
@@ -475,7 +834,20 @@ method doif {
                     minIndentLevel := minInd
                 }
                 while {(accept("rbrace")).not} do {
-                    expectConsume {statement}
+                    if(didConsume({statement}).not) then {
+                        def suggestion = errormessages.suggestion.new
+                        def closingBrace = findClosingBrace(btok, false)
+                        if(closingBrace.found == false) then {
+                            if(closingBrace.tok == lastToken) then {
+                                suggestion.insert("}")afterToken(lastToken)
+                            } else {
+                                suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                            }
+                        }
+                        suggestion.deleteToken(sym)
+                        errormessages.syntaxError("An elseif statement must end with a '}'.")atPosition(
+                            sym.line, sym.linePos)withSuggestion(suggestion)
+                    }
                     v := values.pop
                     ebody.push(v)
                 }
@@ -491,8 +863,21 @@ method doif {
             }
             if (accept("identifier") && (sym.value == "else")) then {
                 next
-                if ((accept("lbrace")).not) then {
-                    util.syntax_error("Expected '\{'.")
+                if(sym.kind != "lbrace") then {
+                    def suggestion = errormessages.suggestion.new
+                    def closingBrace = findClosingBrace(btok, true)
+                    if(closingBrace.found == false) then {
+                        if(closingBrace.tok == lastToken) then {
+                            suggestion.replaceToken(lastToken)leading(false)trailing(true)with("else \{}")
+                        } else {
+                            suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                            suggestion.replaceToken(lastToken)leading(false)trailing(true)with("else \{")
+                        }
+                    } else {
+                        suggestion.replaceToken(lastToken)leading(false)trailing(true)with("else \{")
+                    }
+                    errormessages.syntaxError("An else statement must have a '\{' after the 'else'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
                 }
                 next
                 // Just take all the statements and put them into
@@ -503,18 +888,57 @@ method doif {
                     minIndentLevel := minInd
                 }
                 while {(accept("rbrace")).not} do {
-                    expectConsume {statement}
+                    if(didConsume({statement}).not) then {
+                        def suggestion = errormessages.suggestion.new
+                        def closingBrace = findClosingBrace(btok, false)
+                        if(closingBrace.found == false) then {
+                            if(closingBrace.tok == lastToken) then {
+                                suggestion.insert("}")afterToken(lastToken)
+                            } else {
+                                suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                            }
+                        }
+                        suggestion.deleteToken(sym)
+                        errormessages.syntaxError("An else statement must end with a '}'.")atPosition(
+                            sym.line, sym.linePos)withSuggestion(suggestion)
+                    }
                     v := values.pop
                     curelse.push(v)
                 }
                 next
             }
-            util.setPosition(btok.line, btok.linePos)
             var o := ast.ifNode.new(cond, body, elseblock)
             values.push(o)
         } else {
             // Raise an error here, or it will spin nastily forever.
-            util.syntax_error("'if' with no 'then'.")
+            def suggestion = errormessages.suggestion.new
+            if(sym.kind == "lbrace") then {
+                def closingBrace = findClosingBrace(btok, false)
+                if(closingBrace.found == false) then {
+                    if(closingBrace.tok == sym) then {
+                        suggestion.replaceToken(sym)leading(true)trailing(false)with(" then \{}")
+                    } else {
+                        suggestion.replaceToken(sym)leading(true)trailing(false)with(" then \{")
+                        suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                    }
+                } else {
+                    suggestion.replaceToken(sym)leading(true)trailing(false)with(" then \{")
+                }
+            } else {
+                def closingBrace = findClosingBrace(btok, true)
+                if(closingBrace.found == false) then {
+                    if(closingBrace.tok == lastToken) then {
+                        suggestion.insert(" then \{}")afterToken(lastToken)
+                    } else {
+                        suggestion.insert(" then \{")afterToken(lastToken)
+                        suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                    }
+                } else {
+                    suggestion.insert(" then \{")afterToken(lastToken)
+                }
+            }
+            errormessages.syntaxError("An if statement must have 'then' after the expression in parentheses.")atPosition(
+                sym.line, sym.linePos)withSuggestion(suggestion)
         }
         minIndentLevel := localMin
         statementIndent := localStatementIndent
@@ -540,14 +964,44 @@ method prefixop {
         next
         if (accept("lparen")) then {
             next
-            if (accept("rparen")) then {
-                util.syntax_error("Empty () in expression.")
+            if(didConsume({expression}).not) then {
+                def suggestion = errormessages.suggestion.new
+                def nextTok = findNextValidToken("rparen")
+                if(nextTok == sym) then {
+                    suggestion.insert("«expression»")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+                }
+                errormessages.syntaxError("Parentheses must contain a valid expression.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
             }
-            expression
-            expect("rparen")
+            if(sym.kind != "rparen") then {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert(")")afterToken(lastToken)
+                errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
             next
         } else {
-            expectConsume {term}
+            if(didConsume({term}).not) then {
+                def suggestions = []
+                var suggestion := errormessages.suggestion.new
+                def nextTok = findNextValidToken("rparen")
+                if(nextTok == sym) then {
+                    suggestion.insert("«expression»")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+                }
+                suggestions.push(suggestion)
+                if(lastToken.prev.kind == "bind") then {
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                    suggestion.deleteToken(lastToken.prev)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                }
+                errormessages.syntaxError("A prefix operator must be followed by an expression.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestions(suggestions)
+            }
         }
         dotrest
         callrest
@@ -563,13 +1017,24 @@ method generic {
     if (accept("lgeneric")) then {
         def id = values.pop
         def gens = []
+        def startToken = sym
         next
         while {accept("identifier")} do {
             identifier
             while {accept("dot")} do {
                 next
                 def memberIn = values.pop
-                expect "identifier"
+                if(sym.kind != "identifier") then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    suggestion.insert("«type name»")afterToken(lastToken)
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteToken(lastToken)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A type name must follow the '.'.")atPosition(
+                        lastToken.line, lastToken.linePos + 1)withSuggestions(suggestions)
+                }
                 identifier
                 def memberName = values.pop
                 values.push(ast.memberNode.new(memberName.value, memberIn))
@@ -579,10 +1044,28 @@ method generic {
             if (accept("comma")) then {
                 next
             } else {
-                expect("rgeneric")
+                if(sym.kind != "rgeneric") then {
+                    def suggestion = errormessages.suggestion.new
+                    suggestion.insert(">")afterToken(lastToken)
+                    def suggestion2 = errormessages.suggestion.new
+                    suggestion2.insert(" ")beforeToken(startToken)
+                    def suggestions = [suggestion, suggestion2]
+                    errormessages.syntaxError("A type containing a '<' must end with a '>', or the '<' operator must have a space before it.")atPosition(
+                            lastToken.line, lastToken.linePos + lastToken.size)
+                        withSuggestions(suggestions)
+                }
             }
         }
-        expect("rgeneric")
+        if(sym.kind != "rgeneric") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(">")afterToken(lastToken)
+            def suggestion2 = errormessages.suggestion.new
+            suggestion2.insert(" ")beforeToken(startToken)
+            def suggestions = [suggestion, suggestion2]
+            errormessages.syntaxError("A type containing a '<' must end with a '>', or the '<' operator must have a space before it.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)
+                withSuggestions(suggestions)
+        }
         next
         values.push(ast.genericNode.new(id, gens))
     }
@@ -592,14 +1075,52 @@ method catchcase {
         return 0
     }
     def localmin = minIndentLevel
+    def catchTok = sym
     next
     if (accept("lbrace")) then {
         block
     } else {
-        expect "lparen"
+        if(sym.kind != "lparen") then {
+            def suggestion = errormessages.suggestion.new
+            // Look ahead for a rbrace, rparen, or case.
+            def nextTok = findNextToken({ t -> (t.kind == "rbrace")
+                || ((t.kind == "rparen") && (t.line == catchTok.line))
+                || ((t.kind == "identifier") && (t.value == "case")) })
+            if(nextTok == false) then {
+                suggestion.insert(" \{}")afterToken(catchTok)
+            } elseif(nextTok.kind == "rbrace") then {
+                suggestion.insert(" \{")afterToken(catchTok)
+            } elseif(nextTok.kind == "rparen") then {
+                if(nextTok == sym) then {
+                    suggestion.insert("(«expression»")afterToken(lastToken)andTrailingSpace(true)
+                } else {
+                    suggestion.insert("(")afterToken(lastToken)andTrailingSpace(true)
+                }
+            } elseif(nextTok.kind == "identifier") then {
+                suggestion.insert(" \{")afterToken(catchTok)
+                suggestion.insert("\} ")beforeToken(nextTok)
+            }
+            errormessages.syntaxError("A catch statement must have either a block or an expression in parentheses after the 'catch'.")atPosition(
+                catchTok.line, catchTok.linePos + catchTok.size + 1)withSuggestion(suggestion)
+        }
         next
-        expectConsume {expression}
-        expect "rparen"
+        if(didConsume({expression}).not) then {
+            def suggestion = errormessages.suggestion.new
+            def nextTok = findNextValidToken("rparen")
+            if(nextTok == sym) then {
+                suggestion.insert("«expression»")afterToken(lastToken)
+            } else {
+                suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+            }
+            errormessages.syntaxError("A catch statement must have either a block or an expression in parentheses after the 'catch'.")atPosition(
+                sym.line, sym.linePos)withSuggestion(suggestion)
+        }
+        if(sym.kind != "rparen") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(")")afterToken(lastToken)
+            errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
         next
     }
     def mainblock = values.pop
@@ -611,11 +1132,45 @@ method catchcase {
             block
         } elseif (accept("lparen")) then {
             next
-            expectConsume {expression}
-            expect("rparen")
+            if(didConsume({expression}).not) then {
+                def suggestion = errormessages.suggestion.new
+                def nextTok = findNextValidToken("rparen")
+                if(nextTok == sym) then {
+                    suggestion.insert("«expression»")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+                }
+                errormessages.syntaxError("A catch statement must have either a matching block or an expression in parentheses after the 'case'.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
+            }
+            if(sym.kind != "rparen") then {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert(")")afterToken(lastToken)
+                errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
             next
         } else {
-            util.syntax_error("No argument to case.")
+            def suggestions = []
+            def nextTok = findNextTokenIndentedAt(lastToken)
+            var suggestion := errormessages.suggestion.new
+            if(nextTok == false) then {
+                suggestion.insert(" }")afterToken(tokens.last)
+                suggestion.insert(" \{")afterToken(lastToken)
+                suggestions.push(suggestion)
+            } elseif(nextTok == sym) then {
+                suggestion.insert(" («expression»)")afterToken(lastToken)
+                suggestions.push(suggestion)
+                suggestion := errormessages.suggestion.new
+                suggestion.insert(" \{ «match expression» }")afterToken(lastToken)
+                suggestions.push(suggestion)
+            } else {
+                suggestion.insert(" }")afterToken(nextTok.prev)
+                suggestion.insert(" \{")afterToken(lastToken)
+                suggestions.push(suggestion)
+            }
+            errormessages.syntaxError("A catch statement must have either a matching block or an expression in parentheses after the 'case'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
         }
         cases.push(values.pop)
     }
@@ -625,11 +1180,45 @@ method catchcase {
             block
         } elseif (accept("lparen")) then {
             next
-            expectConsume {expression}
-            expect("rparen")
+            if(didConsume({expression}).not) then {
+                def suggestion = errormessages.suggestion.new
+                def nextTok = findNextValidToken("rparen")
+                if(nextTok == sym) then {
+                    suggestion.insert("«expression»")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+                }
+                errormessages.syntaxError("A catch statement must have either a block or an expression in parentheses after the 'finally'.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
+            }
+            if(sym.kind != "rparen") then {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert(")")afterToken(lastToken)
+                errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
             next
         } else {
-            util.syntax_error("No argument to finally.")
+            def suggestions = []
+            def nextTok = findNextTokenIndentedAt(lastToken)
+            var suggestion := errormessages.suggestion.new
+            if(nextTok == false) then {
+                suggestion.insert(" }")afterToken(tokens.first)
+                suggestion.insert(" \{")afterToken(lastToken)
+                suggestions.push(suggestion)
+            } elseif(nextTok == sym) then {
+                suggestion.insert(" («expression»)")afterToken(lastToken)
+                suggestions.push(suggestion)
+                suggestion := errormessages.suggestion.new
+                suggestion.insert(" \{ «expression» }")afterToken(lastToken)
+                suggestions.push(suggestion)
+            } else {
+                suggestion.insert(" }")afterToken(nextTok.prev)
+                suggestion.insert(" \{")afterToken(lastToken)
+                suggestions.push(suggestion)
+            }
+            errormessages.syntaxError("A catch statement must have either a block or an expression in parentheses after the 'finally'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
         }
         finally := values.pop
     }
@@ -641,12 +1230,47 @@ method matchcase {
         return 0
     }
     def localmin = minIndentLevel
+    def matchTok = sym
     next
-    expect("lparen")
+    if(sym.kind != "lparen") then {
+        def suggestion = errormessages.suggestion.new
+        // Look ahead for a rparen or case.
+        def nextTok = findNextToken({ t -> ((t.kind == "rparen") && (t.line == matchTok.line))
+            || ((t.kind == "identifier") && (t.value == "case")) })
+        if(nextTok == false) then {
+            suggestion.insert("(«expression»)")afterToken(matchTok)
+        } elseif(nextTok.kind == "rparen") then {
+            if(nextTok == sym) then {
+                suggestion.insert("(«expression»")beforeToken(sym)
+            } else {
+                suggestion.insert("(")beforeToken(sym)
+            }
+        } elseif(nextTok.kind == "identifier") then {
+            suggestion.insert("(")beforeToken(sym)
+            suggestion.insert(")")afterToken(nextTok.prev)andTrailingSpace(true)
+        }
+        errormessages.syntaxError("A match statement must have an expression in parentheses after the 'match'.")atPosition(
+            matchTok.line, matchTok.linePos + matchTok.size)withSuggestion(suggestion)
+    }
     next
-    expectConsume {expression}
+    if(didConsume({expression}).not) then {
+        def suggestion = errormessages.suggestion.new
+        def nextTok = findNextValidToken("rparen")
+        if(nextTok == sym) then {
+            suggestion.insert("«expression»")afterToken(lastToken)
+        } else {
+            suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+        }
+        errormessages.syntaxError("A match statement must have an expression in parentheses after the 'match'.")atPosition(
+            sym.line, sym.linePos)withSuggestion(suggestion)
+    }
     def matchee = values.pop
-    expect("rparen")
+    if(sym.kind != "rparen") then {
+        def suggestion = errormessages.suggestion.new
+        suggestion.insert(")")afterToken(lastToken)
+        errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+            lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+    }
     next
     def cases = []
     var elsecase := false
@@ -656,11 +1280,45 @@ method matchcase {
             block
         } elseif (accept("lparen")) then {
             next
-            expectConsume {expression}
-            expect("rparen")
+            if(didConsume({expression}).not) then {
+                def suggestion = errormessages.suggestion.new
+                def nextTok = findNextValidToken("rparen")
+                if(nextTok == sym) then {
+                    suggestion.insert("«expression»")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+                }
+                errormessages.syntaxError("A match statement must have either a matching block or an expression in parentheses after the 'case'.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
+            }
+            if(sym.kind != "rparen") then {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert(")")afterToken(lastToken)
+                errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
             next
         } else {
-            util.syntax_error("No argument to case.")
+            def suggestions = []
+            def nextTok = findNextTokenIndentedAt(lastToken)
+            var suggestion := errormessages.suggestion.new
+            if(nextTok == false) then {
+                suggestion.insert(" }")afterToken(tokens.last)
+                suggestion.insert(" \{")afterToken(lastToken)
+                suggestions.push(suggestion)
+            } elseif(nextTok == sym) then {
+                suggestion.insert(" («expression»)")afterToken(lastToken)
+                suggestions.push(suggestion)
+                suggestion := errormessages.suggestion.new
+                suggestion.insert(" \{ «match expression» }")afterToken(lastToken)
+                suggestions.push(suggestion)
+            } else {
+                suggestion.insert(" }")afterToken(nextTok.prev)
+                suggestion.insert(" \{")afterToken(lastToken)
+                suggestions.push(suggestion)
+            }
+            errormessages.syntaxError("A match statement must have either a matching block or an expression in parentheses after the 'case'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
         }
         cases.push(values.pop)
     }
@@ -670,11 +1328,45 @@ method matchcase {
             block
         } elseif (accept("lparen")) then {
             next
-            expectConsume {expression}
-            expect("rparen")
+            if(didConsume({expression}).not) then {
+                def suggestion = errormessages.suggestion.new
+                def nextTok = findNextValidToken("rparen")
+                if(nextTok == sym) then {
+                    suggestion.insert("«expression»")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+                }
+                errormessages.syntaxError("A match statement must have either a block or an expression in parentheses after the 'else'.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
+            }
+            if(sym.kind != "rparen") then {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert(")")afterToken(lastToken)
+                errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
             next
         } else {
-            util.syntax_error("No argument to else.")
+            def suggestions = []
+            def nextTok = findNextTokenIndentedAt(lastToken)
+            var suggestion := errormessages.suggestion.new
+            if(nextTok == false) then {
+                suggestion.insert(" }")afterToken(tokens.first)
+                suggestion.insert(" \{")afterToken(lastToken)
+                suggestions.push(suggestion)
+            } elseif(nextTok == sym) then {
+                suggestion.insert(" («expression»)")afterToken(lastToken)
+                suggestions.push(suggestion)
+                suggestion := errormessages.suggestion.new
+                suggestion.insert(" \{ «expression» }")afterToken(lastToken)
+                suggestions.push(suggestion)
+            } else {
+                suggestion.insert(" }")afterToken(nextTok.prev)
+                suggestion.insert(" \{")afterToken(lastToken)
+                suggestions.push(suggestion)
+            }
+            errormessages.syntaxError("A match statement must have either a block or an expression in parentheses after the 'else'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
         }
         elsecase := values.pop
     }
@@ -720,8 +1412,23 @@ method expression {
         def tmpStatementToken = statementToken
         statementToken := sym
         next
-        expectConsume {expression}
-        expect("rparen")
+        if(didConsume({expression}).not) then {
+            def suggestion = errormessages.suggestion.new
+            def nextTok = findNextValidToken("rparen")
+            if(nextTok == sym) then {
+                suggestion.insert("«expression»")afterToken(lastToken)
+            } else {
+                suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+            }
+            errormessages.syntaxError("Parentheses must contain a valid expression.")atPosition(
+                sym.line, sym.linePos)withSuggestion(suggestion)
+        }
+        if(sym.kind != "rparen") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(")")afterToken(lastToken)
+            errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
         statementToken := tmpStatementToken
         next
     } else {
@@ -741,9 +1448,31 @@ method postfixsquare {
     if (acceptSameLine("lsquare")) then {
         next
         var expr := values.pop
-        expectConsume {expression}
+        if(didConsume({expression}).not) then {
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            def nextTok = findNextValidToken("rsquare")
+            if(nextTok == sym) then {
+                suggestion.insert("«index»")afterToken(lastToken)
+            } else {
+                suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«index»")
+            }
+            suggestions.push(suggestion)
+            if(nextTok.kind == "rsquare") then {
+                suggestion := errormessages.suggestion.new
+                suggestion.deleteTokenRange(lastToken, nextTok)leading(true)trailing(false)
+                suggestions.push(suggestion)
+            }
+            errormessages.syntaxError("A '[' in an expression must be followed by another expression and a ']'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
+        }
         var index := values.pop
-        expect("rsquare")
+        if(sym.kind != "rsquare") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert("]")afterToken(lastToken)
+            errormessages.syntaxError("A '[' in an expression must be followed by another expression and a ']'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
         next
         var o := ast.indexNode.new(expr, index)
         values.push(o)
@@ -804,8 +1533,17 @@ method expressionrest {
                 // If: this is not the first operator, it is not the same
                 // as the last operator, and the expression has not been
                 // entirely arithmetic, raise a syntax error.
-                util.syntax_error("Mixed operators without parentheses: "
-                    ++ "'{opdtype}' and '{o}'.")
+                def suggestions = []
+                var suggestion := errormessages.suggestion.new
+                suggestion.insert(")")afterToken(sym)
+                suggestion.insert("(")beforeToken(lastToken.prev)
+                suggestions.push(suggestion)
+                suggestion := errormessages.suggestion.new
+                suggestion.insert(")")afterToken(lastToken.prev)
+                suggestion.insert("(")beforeToken(lastToken.prev.prev.prev)
+                suggestions.push(suggestion)
+                errormessages.syntaxError("An expression containing both mathematical and non-mathematical operators requires parentheses.")atPosition(
+                    lastToken.prev.line, lastToken.prev.linePos)withSuggestions(suggestions)
             }
             opdtype := o
             while {(ops.size > 0) && (prec <= toprec(ops))} do {
@@ -829,18 +1567,56 @@ method expressionrest {
                 // precedence. Possibly parenthesised expressions could
                 // be allowed in term above?
                 next
-                if (accept("rparen")) then {
-                    util.syntax_error("Empty () in expression.")
+                if(didConsume({expression}).not) then {
+                    def suggestion = errormessages.suggestion.new
+                    def nextTok = findNextValidToken("rparen")
+                    if(nextTok == sym) then {
+                        suggestion.insert("«expression»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+                    }
+                    errormessages.syntaxError("Parentheses must contain a valid expression.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
                 }
-                expression
-                expect("rparen")
+                if(sym.kind != "rparen") then {
+                    def suggestion = errormessages.suggestion.new
+                    suggestion.insert(")")afterToken(lastToken)
+                    errormessages.syntaxError("An expression beginning with a '(' must end with a ')'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+                }
                 next
             } else {
-                util.setPosition(lastToken.line, lastToken.linePos + 1)
                 if (!tokenOnSameLine) then {
-                    util.syntax_error "expected term after operator."
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    suggestion.deleteToken(lastToken)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.insert(" «expression»")afterToken(lastToken)
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.insert(" " ++ util.lines[sym.line])afterToken(lastToken)
+                    suggestion.deleteLine(sym.line)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A valid expression must follow '{lastToken.value}'. This is often caused by a new line in the middle of an expression.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestions(suggestions)
                 }
-                expectConsume {term} error "expected term after operator."
+                if(didConsume({term}).not) then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    def nextTok = findNextValidToken("comma", "rparen", "rsquare", "rbrace")
+                    if(nextTok == sym) then {
+                        suggestion.insert(" «expression»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                    }
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A valid expression must follow '{lastToken.value}'. This is often caused by a new line in the middle of an expression.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestions(suggestions)
+                }
             }
 
             // Regardless of where the last value came from, it may have
@@ -864,7 +1640,7 @@ method expressionrest {
         tmp := terms.pop
         values.push(tmp)
         if (terms.size > 0) then {
-            util.syntax_error("Values left on term stack.")
+            errormessages.syntaxError("Values left on term stack.")atPosition(sym.line, sym.linePos)
         }
     }
 }
@@ -889,7 +1665,15 @@ method dotrest {
                 callrest
             }
         } else {
-            util.syntax_error("Expected identifier after '.'.")
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            suggestion.deleteToken(lastToken)
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            suggestion.insert("«method name»")afterToken(lastToken)
+            suggestions.push(suggestion)
+            errormessages.syntaxError("A field or method name must follow a '.'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
         }
     }
 }
@@ -927,6 +1711,7 @@ method callrest {
     var genericIdents := false
     if (acceptSameLine "lgeneric") then {
         // Generic!
+        def startToken = sym
         next
         genericIdents := collections.list.new
         while {accept("identifier")} do {
@@ -936,10 +1721,21 @@ method callrest {
                 next
             }
         }
-        expect "rgeneric"
+        if(sym.kind != "rgeneric") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(">")afterToken(lastToken)
+            def suggestion2 = errormessages.suggestion.new
+            suggestion2.insert(" ")beforeToken(startToken)
+            def suggestions = [suggestion, suggestion2]
+            errormessages.syntaxError("A method request containing a '<' must have a matching '>', or the '<' operator must have a space before it.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)
+                withSuggestions(suggestions)
+        }
         next
     }
     if (acceptSameLine("lparen")) then {
+        part.line := sym.line
+        part.linePos := sym.linePos
         tok := sym
         hadcall := true
         methn := meth.value
@@ -950,10 +1746,34 @@ method callrest {
             if (accept("colon")) then {
                 tmp := values.pop
                 if (tmp.kind != "identifier") then {
-                    util.syntax_error("Colon must follow identifier.")
+                    def suggestion = errormessages.suggestion.new
+                    if(sym.next.kind == "identifier") then {
+                        suggestion.deleteTokenRange(sym, sym.next)leading(true)trailing(false)
+                        errormessages.syntaxError("Only variables and constants may be followed by a ':' and a type.")atRange(
+                            sym.line, sym.linePos, sym.next.linePos + sym.next.size - 1)withSuggestion(suggestion)
+                    } else {
+                        suggestion.deleteToken(sym)leading(true)trailing(false)
+                        errormessages.syntaxError("Only variables and constants may be followed by a ':' and a type.")atRange(
+                            sym.line, sym.linePos, sym.linePos)withSuggestion(suggestion)
+                    }
                 }
                 next
-                expectConsume {expression}
+                if(didConsume({expression}).not) then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    def nextTok = findNextValidToken("rparen")
+                    if(nextTok == sym) then {
+                        suggestion.insert(" «type name»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «type name»")
+                    }
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A type name or type expression must follow ':'.")atPosition(
+                        sym.line, sym.linePos)withSuggestions(suggestions)
+                }
                 tmp.dtype := values.pop
                 values.push(tmp)
             }
@@ -961,15 +1781,54 @@ method callrest {
                 tmp := values.pop
                 part.args.push(tmp)
                 next
-                expectConsume {expression}
+                if(didConsume({expression}).not) then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    def nextTok = findNextValidToken("rparen")
+                    if(nextTok == sym) then {
+                        suggestion.insert(" «expression»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                    }
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A method call must have an expression after a ','.")atPosition(
+                        sym.line, sym.linePos)withSuggestions(suggestions)
+                }
                 // For matching blocks - same as above
                 if (accept("colon")) then {
                     tmp := values.pop
                     if (tmp.kind != "identifier") then {
-                        util.syntax_error("Colon must follow identifier.")
+                        def suggestion = errormessages.suggestion.new
+                        if(sym.next.kind == "identifier") then {
+                            suggestion.deleteTokenRange(sym, sym.next)leading(true)trailing(false)
+                            errormessages.syntaxError("Only variables and constants may be followed by a ':' and a type.")atRange(
+                                sym.line, sym.linePos, sym.next.linePos + sym.next.size - 1)withSuggestion(suggestion)
+                        } else {
+                            suggestion.deleteToken(sym)
+                            errormessages.syntaxError("Only variables and constants may be followed by a ':' and a type.")atRange(
+                                sym.line, sym.linePos, sym.linePos)withSuggestion(suggestion)
+                        }
                     }
                     next
-                    expectConsume {expression}
+                    if(didConsume({expression}).not) then {
+                        def suggestions = []
+                        var suggestion := errormessages.suggestion.new
+                        def nextTok = findNextValidToken("rparen")
+                        if(nextTok == sym) then {
+                            suggestion.insert(" «type name»")afterToken(lastToken)
+                        } else {
+                            suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «type name»")
+                        }
+                        suggestions.push(suggestion)
+                        suggestion := errormessages.suggestion.new
+                        suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                        suggestions.push(suggestion)
+                        errormessages.syntaxError("A type name or type expression must follow ':'.")atPosition(
+                            sym.line, sym.linePos)withSuggestions(suggestions)
+                    }
                     tmp.dtype := values.pop
                     values.push(tmp)
                 }
@@ -977,7 +1836,15 @@ method callrest {
             tmp := values.pop
             part.args.push(tmp)
         }
-        expect("rparen")
+        if(sym.kind != "rparen") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(")")afterToken(lastToken)
+            errormessages.syntaxError("A method call beginning with a '(' must end with a ')'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
+        if (sym.line == part.line) then {
+            part.lineLength := sym.linePos - part.linePos
+        }
         ln := linenum
         next
     } elseif (don'tTakeBlock && {accept("lbrace")onLineOf(tok)}) then {
@@ -1014,8 +1881,10 @@ method callrest {
     if (hadcall) then {
         if (accept("identifier")onLineOfLastOr(tok)) then {
             // Multi-part method name
-            util.setPosition(lnum, lpos)
-            methn := callmprest(ast.identifierNode.new(methn, false), signature, tok)
+            def meth' = ast.identifierNode.new(methn, false)
+            meth'.line := lnum
+            meth'.linePos := lpos
+            methn := callmprest(meth', signature, tok)
             if (meth.kind == "member") then {
                 // callmprest loses this information, so restore
                 // the member lookup (for x.between(3)and(10)-type
@@ -1025,7 +1894,6 @@ method callrest {
                 meth := methn
             }
         }
-        util.setPosition(btok.line, btok.linePos)
         tmp := ast.callNode.new(meth, signature)
         tmp.generics := genericIdents
         values.push(tmp)
@@ -1057,7 +1925,33 @@ method callmprest(meth, signature, tok) {
         var isTerm := false
         if ((accept("lparen")).not && (accept("lbrace")).not
             && accept("string").not && accept("num").not) then {
-            util.syntax_error("Multi-part method name parameters require ().")
+            def suggestion = errormessages.suggestion.new
+            if(sym.kind == "identifier") then {
+                suggestion.replaceToken(sym)leading(true)trailing(false)with("({sym.value})")
+                if(methname == "while()do") then {
+                    errormessages.syntaxError("A while loop must have either a loop body in braces, or a block in parentheses.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
+                } elseif(methname == "for()do") then {
+                    errormessages.syntaxError("A for loop must have either a loop body in braces, or a block in parentheses.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
+                }
+                errormessages.syntaxError("A multi-part method call must have parentheses around each part of the method.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
+            } else {
+                if(methname == "while()do") then {
+                    suggestion.insert(" \{}")afterToken(lastToken)
+                    errormessages.syntaxError("A while loop must have a body.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
+                } elseif(methname == "for()do") then {
+                    suggestion.insert(" \{}")afterToken(lastToken)
+                    errormessages.syntaxError("A for loop must have a body.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
+                } else {
+                    suggestion.insert("()")afterToken(lastToken)
+                    errormessages.syntaxError("A multi-part method call must end with '()'.")atPosition(
+                        sym.line, sym.linePos)withSuggestion(suggestion)
+                }
+            }
         }
         if (accept("lbrace")onLineOfLastOr(tok)
             || accept("string")onLineOfLastOr(tok)
@@ -1078,13 +1972,43 @@ method callmprest(meth, signature, tok) {
             term
         } else {
             if(sym.kind != "rparen") then {
-                expectConsume {expression}
+                if(didConsume({expression}).not) then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    def nextTok = findNextValidToken("rparen")
+                    if(nextTok == sym) then {
+                        suggestion.insert("«expression»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with("«expression»")
+                        suggestions.push(suggestion)
+                        suggestion := errormessages.suggestion.new
+                        suggestion.deleteTokenRange(sym, nextTok.prev)leading(true)trailing(false)
+                    }
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A method call must have an expression or a ')' after a '('.")atPosition(
+                        sym.line, sym.linePos)withSuggestions(suggestions)
+                }
             }
             while {accept("comma")} do {
                 nxt := values.pop
                 part.args.push(nxt)
                 next
-                expectConsume {expression}
+                if(didConsume({expression}).not) then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    def nextTok = findNextValidToken("rparen")
+                    if(nextTok == sym) then {
+                        suggestion.insert(" «expression»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                    }
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A method call must have an expression after a ','.")atPosition(
+                        sym.line, sym.linePos)withSuggestions(suggestions)
+                }
             }
         }
         if (!isEmpty) then {
@@ -1092,15 +2016,22 @@ method callmprest(meth, signature, tok) {
             part.args.push(nxt)
         }
         if (isTerm.not) then {
-            expect("rparen")
+            if(sym.kind != "rparen") then {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert(")")afterToken(lastToken)
+                errormessages.syntaxError("A part of a multi-part method call beginning with a '(' must end with a ')'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
         }
         if (accept("rparen") && isTerm.not) then {
             ln := lastline
             next
         }
     }
-    util.setPosition(ln, lp)
-    ast.identifierNode.new(methname, false)
+    def meth' = ast.identifierNode.new(methname, false)
+    meth'.line := meth.line
+    meth'.linePos := meth.linePos
+    meth'
 }
 
 // Accept a const declaration
@@ -1108,8 +2039,22 @@ method defdec {
     if (accept("keyword") && (sym.value == "def")) then {
         def line = sym.line
         def pos = sym.linePos
+        def defTok = sym
         next
-        expect "identifier"
+        if(sym.kind != "identifier") then {
+            def suggestion = errormessages.suggestion.new
+            def nextToken = findNextToken({ t -> (t.kind == "op")
+                && (t.value == "=") && (t.line == sym.line)})
+            if(nextToken == false) then {
+                suggestion.insert(" «name» =")afterToken(lastToken)
+            } elseif(nextToken == sym) then {
+                suggestion.insert(" «name»")afterToken(lastToken)
+            } else {
+                suggestion.replaceTokenRange(sym, nextToken.prev)leading(false)trailing(true)with("«name» ")
+            }
+            errormessages.syntaxError("A constant declaration must have a name, a '=', and a value after the 'def'.")atPosition(
+                sym.line, sym.linePos)withSuggestion(suggestion)
+        }
         pushidentifier
         var val := false
         var dtype := ast.identifierNode.new("Dynamic", false)
@@ -1122,16 +2067,40 @@ method defdec {
         def anns = doannotation
         if (accept("op") && (sym.value == "=")) then {
             next
-            expectConsume {
-                expression
-            } error "initial value of def expected after '='"
+            if(didConsume({expression}).not) then {
+                def suggestion = errormessages.suggestion.new
+                def nextTok = findNextValidToken()
+                if(nextTok == sym) then {
+                    suggestion.insert(" «expression»")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                }
+                errormessages.syntaxError("A constant declaration must have a value after the '='.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
             val := values.pop
         } elseif (accept("bind")) then {
-            util.syntax_error("def declaration uses '=', not ':='.")
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            suggestion.replaceToken(sym)with("=")
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            suggestion.replaceToken(defTok)with("var")
+            suggestions.push(suggestion)
+            errormessages.syntaxError("A constant declaration must use '=' instead of ':='. A variable declaration uses 'var' and ':='.")atRange(
+                sym.line, sym.linePos, sym.linePos + 1)withSuggestions(suggestions)
         } else {
-            util.syntax_error("def declaration requires value.")
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            suggestion.insert(" = «expression»")afterToken(lastToken)
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            suggestion.replaceToken(defTok)with("var")
+            suggestions.push(suggestion)
+            errormessages.syntaxError("A constant declaration must have a '=' and a value after the name. "
+                ++ "A variable declaration does not require a value and uses 'var' instead of 'def'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
         }
-        util.setPosition(line, pos)
         var o := ast.defDecNode.new(name, val, dtype)
         var hasVisibility := false
         var hasAccessibility := false
@@ -1155,6 +2124,7 @@ method defdec {
                 o.annotations.push(ast.identifierNode.new("public", false))
             }
         }
+        o.startToken := defTok
         values.push(o)
     }
 }
@@ -1164,8 +2134,20 @@ method vardec {
     if (accept("keyword") && (sym.value == "var")) then {
         def line = sym.line
         def pos = sym.linePos
+        def varTok = sym
         next
-        expect "identifier"
+        if(sym.kind != "identifier") then {
+            def suggestion = errormessages.suggestion.new
+            def nextToken = findNextToken({ t -> (t.kind == "bind")
+                && (t.line == sym.line)})
+            if((nextToken == false).orElse({nextToken == sym})) then {
+                suggestion.insert(" «name»")afterToken(lastToken)
+            } else {
+                suggestion.replaceTokenRange(sym, nextToken.prev)leading(false)trailing(true)with("«name» ")
+            }
+            errormessages.syntaxError("A variable declaration must have a name after the 'var'.")atPosition(
+                sym.line, sym.linePos)withSuggestion(suggestion)
+        }
         pushidentifier
         var val := false
         var dtype := ast.identifierNode.new("Dynamic", false)
@@ -1178,15 +2160,36 @@ method vardec {
         def anns = doannotation
         if (accept("bind")) then {
             next
-            expectConsume {
-                expression
-            } error "initial value of var expected after ':='"
+            if(didConsume({expression}).not) then {
+                def suggestions = []
+                var suggestion := errormessages.suggestion.new
+                def nextTok = findNextValidToken()
+                if(nextTok == sym) then {
+                    suggestion.insert(" «expression»")afterToken(lastToken)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                }
+                suggestions.push(suggestion)
+                suggestion := errormessages.suggestion.new
+                suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                suggestions.push(suggestion)
+                errormessages.syntaxError("A variable declaration must have a value after the ':='. "
+                    ++ "A variable without a value can be declared with 'var' followed only by the variable name.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestions(suggestions)
+            }
             val := values.pop
         }
         if (accept("op") && (sym.value == "=")) then {
-            util.syntax_error("var declaration uses ':=', not '='.")
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            suggestion.replaceToken(sym)with(":=")
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            suggestion.replaceToken(varTok)with("def")
+            suggestions.push(suggestion)
+            errormessages.syntaxError("A variable declaration must use ':=' instead of '='. A constant declaration uses 'def' and '='.")atRange(
+                sym.line, sym.linePos, sym.linePos)withSuggestions(suggestions)
         }
-        util.setPosition(line, pos)
         var o := ast.varDecNode.new(name, val, dtype)
         var hasVisibility := false
         var hasAccessibility := false
@@ -1228,12 +2231,32 @@ method doarray {
                 tmp := values.pop
                 params.push(tmp)
                 next
-                expectConsume {expression}
+                if(didConsume({expression}).not) then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    def nextTok = findNextValidToken("rsquare")
+                    if(nextTok == sym) then {
+                        suggestion.insert(" «expression»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                    }
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A list must contain zero or more valid expressions separated by commas.")atPosition(
+                        sym.line, sym.linePos)withSuggestions(suggestions)
+                }
             }
             tmp := values.pop
             params.push(tmp)
         }
-        expect("rsquare")
+        if(sym.kind != "rsquare") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert("]")afterToken(lastToken)
+            errormessages.syntaxError("A list beginning with a '[' must end with a ']'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
         var o := ast.arrayNode.new(params)
         values.push(o)
         next
@@ -1244,7 +2267,19 @@ method doarray {
 method dodialect {
     if (accept("keyword") && (sym.value == "dialect")) then {
         next
-        expect "string"
+        if(sym.kind != "string") then {
+            def suggestion = errormessages.suggestion.new
+            var errorPos
+            if((sym.kind == "identifier") && (sym.line == lastToken.line)) then {
+                suggestion.replaceToken(sym)with("\"{sym.value}\"")
+                errorPos := sym.linePos
+            } else {
+                suggestion.insert(" \"«dialect name»\"")afterToken(lastToken)
+                errorPos := lastToken.linePos + lastToken.size + 1
+            }
+            errormessages.syntaxError("A dialect statement must have the name of the dialect in quotes after the 'dialect'.")atPosition(
+                lastToken.line, errorPos)withSuggestion(suggestion)
+        }
         values.push(ast.dialectNode.new(sym.value))
         next
     }
@@ -1255,8 +2290,21 @@ method inheritsdec {
     if (accept("keyword") && (sym.value == "inherits")) then {
         checkIndent
         next
-        expectConsume {
-            expression
+        if(didConsume({expression}).not) then {
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            def nextTok = findNextValidToken("rsquare")
+            if(nextTok == sym) then {
+                suggestion.insert(" «parent»")afterToken(lastToken)
+            } else {
+                suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «parent»")
+            }
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+            suggestions.push(suggestion)
+            errormessages.syntaxError("An inheritance statement must have the object being inherited from after the 'inherits'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size + 1)withSuggestions(suggestions)
         }
         var tmp := values.pop
         values.push(ast.inheritsNode.new(tmp))
@@ -1271,7 +2319,17 @@ method doobject {
         def localMinIndentLevel = minIndentLevel
         next
         var superclass := false
-        expect("lbrace")
+        if(sym.kind != "lbrace") then {
+            def suggestion = errormessages.suggestion.new
+            def nextTok = findNextToken({ t -> t.kind == "rbrace" })
+            if(nextTok == false) then {
+                suggestion.insert(" \{}")afterToken(lastToken)
+            } else {
+                suggestion.insert(" \{")afterToken(lastToken)
+            }
+            errormessages.syntaxError("An object must have a '\{' afer the 'object'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
         values.push(object {
             var kind := "lbrace"
             var register := ""
@@ -1291,13 +2349,17 @@ method doobject {
             inheritsdec
             statement
             if (sym.kind == "eof") then {
-                expect("rbrace")
+                if(sym.kind != "rbrace") then {
+                    def suggestion = errormessages.suggestion.new
+                    suggestion.insert("}")afterToken(lastToken)
+                    errormessages.syntaxError("An object must end with a '}'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+                }
             } elseif ((values.size == sz) && (lastToken.kind != "semicolon")) then {
-                util.setPosition(sym.line, sym.linePos)
-                util.syntax_error("Unexpected symbol in "
-                    ++ "object declaration. Expected 'var', 'def', 'method', "
-                    ++ "'\}', or statement, "
-                    ++ "got {sym.kind}: '{sym.value}'.")
+                def suggestion = errormessages.suggestion.new
+                suggestion.deleteToken(sym)
+                errormessages.syntaxError("An object can only contain variable, constant, and method declarations; and statements.")atRange(
+                    sym.line, sym.linePos, sym.linePos + sym.size - 1)withSuggestion(suggestion)
             }
             sz := values.size
         }
@@ -1332,11 +2394,24 @@ method doclass {
         def btok = sym
         next
         def localMinIndentLevel = minIndentLevel
-        expect("identifier")
-        pushidentifier // A class currently cannot be anonymous
-        if (!accept("dot")) then {
-            return doclassOld
+        if(sym.kind != "identifier") then {
+            def suggestions = []
+            if(sym.kind == "lbrace") then {
+                var suggestion := errormessages.suggestion.new
+                suggestion.insert(" «class name».new")afterToken(lastToken)
+                suggestions.push(suggestion)
+                suggestion := errormessages.suggestion.new
+                suggestion.replaceToken(lastToken)with("object")
+                suggestions.push(suggestion)
+            } else {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert(" «class name».new \{}")afterToken(lastToken)
+                suggestions.push(suggestion)
+            }
+            errormessages.syntaxError("A class must have a name after the 'class'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size + 1)withSuggestions(suggestions)
         }
+        pushidentifier // A class currently cannot be anonymous
         def cname = values.pop
         next
         var s := methodsignature(false)
@@ -1345,7 +2420,10 @@ method doclass {
         var dtype := s.rtype
         def anns = doannotation
         if (!accept("lbrace")) then {
-            util.syntax_error("Class declaration without body.")
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(" \{")afterToken(lastToken)
+            errormessages.syntaxError("A class must have a '\{' after the name.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size + 1)withSuggestion(suggestion)
         }
         next
         if (sym.line == statementToken.line) then {
@@ -1379,115 +2457,6 @@ method doclass {
             }
         }
         values.push(o)
-        minIndentLevel := localMinIndentLevel
-    }
-}
-
-method doclassOld {
-    if (true) then {
-        def localMinIndentLevel = minIndentLevel
-        generic
-        var superclass := false
-        if (accept("identifier") && (sym.value == "extends")) then {
-            next
-            expect("identifier")
-            identifier
-            generic
-            var nm := values.pop
-            if (accept("dot").not) then {
-                util.syntax_error("extends must have '.new' invocation on right.")
-            }
-            next
-            expect("identifier")
-            identifier
-            var mn := values.pop
-            var scargs := []
-            if (accept("lparen")) then {
-                next
-                while {accept("rparen").not} do {
-                    expectConsume {expression}
-                    var tmp := values.pop
-                    scargs.push(tmp)
-                }
-                next
-            }
-            superclass := ast.callNode.new(ast.memberNode.new(mn.value, nm),
-                [ast.callWithPart.new(mn.value, scargs)])
-        }
-        var cname := values.pop
-        if (cname.kind != "generic") then {
-            util.warning("Old class syntax: should be 'class {cname.value}.new'"
-                ++ " or other factory method name.\n")
-        }
-        if (accept("lbrace")) then {
-            values.push(object {
-                var kind := "lbrace"
-                var register := ""
-            })
-            next
-            var params := []
-            if (accept("identifier")) then {
-                // We have a parameter list, because everything else that
-                // can appear first in a class body is a keyword.
-                pushidentifier
-                var pid := values.pop
-                if (accept("colon")) then {
-                    next
-                    pushidentifier
-                    generic
-                    pid.dtype := values.pop
-                }
-                params.push(pid)
-                while {accept("comma")} do {
-                    next
-                    pushidentifier
-                    generic
-                    pid := values.pop
-                    if (accept("colon")) then {
-                        next
-                        pushidentifier
-                        generic
-                        pid.dtype := values.pop
-                    }
-                    params.push(pid)
-                }
-                if (accept("arrow")) then {
-                    next
-                } else {
-                    util.syntax_error("Expected '->'.")
-                }
-            }
-            var sz := values.size
-            while {(accept("rbrace")).not} do {
-                // Body of the class, the same as the body of an object.
-                vardec
-                methoddec
-                defdec
-                inheritsdec
-                if (values.size == sz) then {
-                    util.syntax_error("Did not consume anything in "
-                        ++ "class declaration.")
-                }
-                sz := values.size
-            }
-            next
-            var rbody := []
-            var n := values.pop
-            while {n.kind != "lbrace"} do {
-                rbody.push(n)
-                n := values.pop
-            }
-            var body := []
-            for (rbody.indices) do { x ->
-                var p := rbody.pop
-                body.push(p)
-            }
-            var o := ast.classNode.new(cname, [ast.signaturePart.new("new", params)],
-                body, superclass, ast.identifierNode.new("new", false), false)
-            values.push(o)
-        } else {
-            util.syntax_error("Class definition without body.")
-        }
         minIndentLevel := localMinIndentLevel
     }
 }
@@ -1530,16 +2499,37 @@ method methoddec {
                 statement
                 s := values.pop
             }
-            if (accept("rbrace")) then {
-                next
-            } else {
-                util.syntax_error("Statement or closing brace of body of "
-                    ++ "method '{meth.value}' expected, not {sym.kind}.")
+            if(sym.kind != "rbrace") then {
+                def suggestion = errormessages.suggestion.new
+                def closingBrace = findClosingBrace(btok, false)
+                if(closingBrace.found == false) then {
+                    if(closingBrace.tok == sym) then {
+                        suggestion.insert("}")afterToken(lastToken)
+                    } else {
+                        suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                    }
+                }
+                suggestion.deleteToken(sym)
+                errormessages.syntaxError("A method must end with a '}'.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
             }
+            next
             minIndentLevel := localMin
         } else {
-            util.syntax_error("No body in method declaration for " ++
-                "'{meth.value}'.")
+            def suggestion = errormessages.suggestion.new
+            def closingBrace = findClosingBrace(btok, true)
+            if(closingBrace.found == false) then {
+                if(closingBrace.tok == lastToken) then {
+                    suggestion.insert(" \{}")afterToken(lastToken)andTrailingSpace(true)
+                } else {
+                    suggestion.addLine(closingBrace.tok.line + 0.1, "}")
+                    suggestion.insert(" \{")afterToken(lastToken)andTrailingSpace(true)
+                }
+            } else {
+                suggestion.insert(" \{")afterToken(lastToken)andTrailingSpace(true)
+            }
+            errormessages.syntaxError("A method must have a '\{' after the name.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
         }
         util.setline(btok.line)
         var o := ast.methodNode.new(meth, signature, body, dtype)
@@ -1577,15 +2567,35 @@ method parsempmndecrest(tm, sameline) {
         part.name := nxt.value
         var vararg := false
         if ((accept("lparen")).not) then {
-            util.syntax_error("Multi-part method name parameters require ().")
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert("()")afterToken(lastToken)
+            errormessages.syntaxError("A multi-part method must have parentheses around each part of the method.")atPosition(
+                sym.line, sym.linePos)withSuggestion(suggestion)
         }
         next
+        var comma := false
         while {accept("identifier")
                 || (accept("op") && (sym.value == "*"))} do {
             if (accept("op")) then {
                 next
                 vararg := true
-                expect("identifier")
+                if(sym.kind != "identifier") then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    suggestion.insert("«parameter name»")afterToken(lastToken)
+                    suggestions.push(suggestion)
+                    if(comma == false) then {
+                        suggestion := errormessages.suggestion.new
+                        suggestion.deleteToken(lastToken)
+                        suggestions.push(suggestion)
+                    } else {
+                        suggestion := errormessages.suggestion.new
+                        suggestion.deleteTokenRange(comma, lastToken)
+                        suggestions.push(suggestion)
+                    }
+                    errormessages.syntaxError("A variable length parameter (a parameter beginning with a '*') must have a name after the '*'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestions(suggestions)
+                }
             }
             pushidentifier
             nxt := values.pop
@@ -1598,15 +2608,26 @@ method parsempmndecrest(tm, sameline) {
             if (vararg) then {
                 part.vararg := nxt
                 tm.varargs := true
-                expect("rparen")
+                if(sym.kind != "rparen") then {
+                    def suggestion = errormessages.suggestion.new
+                    suggestion.insert(")")afterToken(lastToken)
+                    errormessages.syntaxError("A part of a multi-part method beginning with a '(' must end with a ')'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+                }
             } else {
                 part.params.push(nxt)
             }
             if (accept("comma")) then {
+                comma := sym
                 next
             }
         }
-        expect("rparen")
+        if(sym.kind != "rparen") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(")")afterToken(lastToken)
+            errormessages.syntaxError("A part of a multi-part method beginning with a '(' must end with a ')'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
         next
         signature.push(part)
     }
@@ -1615,7 +2636,12 @@ method parsempmndecrest(tm, sameline) {
 
 // Accept a method signature
 method methodsignature(sameline) {
-    expect("identifier")or("op")or("lsquare")
+    if((sym.kind != "identifier") && (sym.kind != "op") && (sym.kind != "lsquare")) then {
+        def suggestion = errormessages.suggestion.new
+        suggestion.insert(" «method name»")afterToken(lastToken)
+        errormessages.syntaxError("A method name must either start with an identifier or '[]'.")atPosition(
+            lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+    }
     pushidentifier
     var meth := values.pop
     var signature := []
@@ -1623,7 +2649,27 @@ method methodsignature(sameline) {
     var genericIdents := []
     signature.push(part)
     if (meth.value == "[") then {
-        expect("rsquare")
+        if(sym.kind != "rsquare") then {
+            if((sym.kind == "identifier") && ((tokens.size == 0).orElse
+                {tokens.first.kind == "rsquare"})) then {
+                def suggestions = []
+                def suggestion = errormessages.suggestion.new
+                if(tokens.size == 0) then {
+                    suggestion.replaceToken(sym)with("]({sym.value})")
+                    suggestions.push(suggestion)
+                } elseif(tokens.first.line == meth.line) then {
+                    suggestion.replaceTokenRange(sym, tokens.first)with("]({sym.value})")
+                    suggestions.push(suggestion)
+                }
+                errormessages.syntaxError("A method name beginning with '[]' must have the parameter name in parentheses after the '[]'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestions(suggestions)
+            } else {
+                def suggestion = errormessages.suggestion.new
+                suggestion.insert("]")afterToken(lastToken)
+                errormessages.syntaxError("A method name must either start with an identifier or '[]'.")atPosition(
+                    lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+            }
+        }
         next
         meth.value := "[]"
     }
@@ -1638,7 +2684,12 @@ method methodsignature(sameline) {
                 next
             }
         }
-        expect "rgeneric"
+        if(sym.kind != "rgeneric") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(">")afterToken(lastToken)
+            errormessages.syntaxError("A type containing a '<' must end with a '>'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+        }
         next
     }
     if (accept("bind")) then {
@@ -1654,15 +2705,34 @@ method methodsignature(sameline) {
     var varargs := false
     var vararg := false
     if (accept("lparen")) then {
+        def lparen = sym
+        part.linePos := sym.linePos
         next
         var id
+        var comma := false
         while {accept("identifier") ||
                 (accept("op") && (sym.value == "*"))} do {
             // Parse the parameter list, including optional dtype
             // annotations.
             if (accept("op")) then {
                 next
-                expect "identifier"
+                if(sym.kind != "identifier") then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    suggestion.insert("«parameter name»")afterToken(lastToken)
+                    suggestions.push(suggestion)
+                    if(comma == false) then {
+                        suggestion := errormessages.suggestion.new
+                        suggestion.deleteToken(lastToken)
+                        suggestions.push(suggestion)
+                    } else {
+                        suggestion := errormessages.suggestion.new
+                        suggestion.deleteTokenRange(comma, lastToken)
+                        suggestions.push(suggestion)
+                    }
+                    errormessages.syntaxError("A variable length parameter (a parameter beginning with a '*') must have a name after the '*'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestions(suggestions)
+                }
                 vararg := true
                 varargs := true
             }
@@ -1675,23 +2745,63 @@ method methodsignature(sameline) {
                     dotyperef
                     dtype := values.pop
                 } else {
-                    util.syntax_error("Expected type after ':'.")
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    suggestion.insert(" «type name»")afterToken(lastToken)
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteToken(lastToken)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A type name or type expression must follow ':'.")atPosition(
+                        sym.line, sym.linePos)withSuggestions(suggestions)
                 }
             }
             id.dtype := dtype
             if (vararg) then {
                 part.vararg := id
-                expect("rparen")
+                if(sym.kind != "rparen") then {
+                    def suggestion = errormessages.suggestion.new
+                    def rparen = findNextToken({ t -> (t.kind == "rparen") && (t.line == sym.line) })
+                    if((sym.kind == "comma") && (rparen != false)) then {
+                        suggestion.insert(",*{id.value}")beforeToken(rparen)
+                        suggestion.deleteTokenRange(lparen.next, sym)leading(true)trailing(false)
+                        errormessages.syntaxError("A variable length parameter (a parameter beginning with a '*') cannot have any more parameters after it.")atRange(
+                            lastToken.line, sym.linePos, rparen.linePos - 1)withSuggestion(suggestion)
+                    } else {
+                        suggestion.insert(")")afterToken(lastToken)
+                        errormessages.syntaxError("A part of a method beginning with a '(' must end with a ')'.")atPosition(
+                            lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+                    }
+                }
             } else {
                 part.params.push(id)
             }
             if (accept("comma")) then {
+                comma := sym
                 next
-            } elseif ((accept("rparen")).not) then {
-                util.syntax_error("Expected ',' or ')'.")
+            } elseif (sym.kind != "rparen") then {
+                if(sym.kind != "rparen") then {
+                    def suggestion = errormessages.suggestion.new
+                    suggestion.insert(")")afterToken(lastToken)
+                    errormessages.syntaxError("A part of a method beginning with a '(' must end with a ')'.")atPosition(
+                        lastToken.line, lastToken.linePos + lastToken.size)withSuggestion(suggestion)
+                }
             }
         }
-        expect("rparen")
+        if(sym.kind != "rparen") then {
+            def suggestion = errormessages.suggestion.new
+            def rparen = findNextToken({ t -> (t.kind == "rparen") && (t.line == lastToken.line) })
+            if(rparen == false) then {
+                suggestion.replaceToken(lastToken)with(")")
+            } else {
+                suggestion.deleteToken(sym)
+            }
+            errormessages.syntaxError("A part of a method beginning with a '(' must end with a ')'.")atRange(
+                lastToken.line, lastToken.linePos, lastToken.linePos)withSuggestion(suggestion)
+        }
+        if (sym.line == part.line) then {
+            part.lineLength := sym.linePos - part.linePos
+        }
         next
         if ((!sameline && accept("identifier")) ||
             acceptSameLine("identifier")) then {
@@ -1724,19 +2834,50 @@ method methodsignature(sameline) {
 // following, as in "import parser".
 method doimport {
     if (accept("keyword") && (sym.value == "import")) then {
+        def importline = sym.line
         next
-        expect("string")
+        if(sym.kind != "string") then {
+            var suggestion := errormessages.suggestion.new
+            var errorPos
+            if((sym.kind == "identifier") && (sym.line == lastToken.line)) then {
+                suggestion.replaceToken(sym)with("\"{sym.value}\"")
+                errorPos := sym.linePos
+            } else {
+                suggestion.insert(" \"«module name»\"")afterToken(lastToken)
+                errorPos := lastToken.linePos + lastToken.size + 1
+            }
+            errormessages.syntaxError("An import statement must have the name of the module in quotes, 'as', and an identifier after 'import'.")atPosition(
+                lastToken.line, errorPos)withSuggestion(suggestion)
+        }
         pushstring
         def p = values.pop
-        expect("identifier")
-        if (sym.value != "as") then {
-            util.syntax_error("Unexpected token {sym.kind}: '{sym.value}'; "
-                ++ "expected 'as'.")
+        if((sym.kind != "identifier") || (sym.value != "as")) then {
+            var suggestion := errormessages.suggestion.new
+            if((sym.kind == "identifier") && (sym.line == lastToken.line)) then {
+                suggestion.insert(" as")afterToken(lastToken)
+            } else {
+                suggestion.insert(" as {p.value}")afterToken(lastToken)
+            }
+            errormessages.syntaxError("An import statement must have 'as', and an identifier after the name of the module in quotes.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size + 1)withSuggestion(suggestion)
         }
         next
-        expect("identifier")
+        if(sym.kind != "identifier") then {
+            var suggestion := errormessages.suggestion.new
+            var errorPos
+            if((sym.kind == "string") && (sym.line == lastToken.line)) then {
+                suggestion.replaceToken(sym)with("{sym.value}")
+                errorPos := sym.linePos
+            } else {
+                suggestion.insert(" {p.value}")afterToken(lastToken)
+                errorPos := lastToken.linePos + lastToken.size + 1
+            }
+            errormessages.syntaxError("An import statement must have an identifier after 'as'.")atPosition(
+                lastToken.line, errorPos)withSuggestion(suggestion)
+        }
         pushidentifier
         def n = values.pop
+        util.setline(importline)
         def o = ast.importNode.new(p.value, n.value)
         if (accept("colon")) then {
             next
@@ -1754,7 +2895,25 @@ method doreturn {
         next
         var retval
         if (tokenOnSameLine) then {
-            expectConsume {expression}
+            if(didConsume({expression}).not) then {
+                def suggestions = []
+                var suggestion := errormessages.suggestion.new
+                def nextTok = findNextValidToken("rbrace")
+                if(nextTok == sym) then {
+                    suggestion.insert(" «expression»")afterToken(lastToken)
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteToken(sym)leading(true)trailing(false)
+                } else {
+                    suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(sym, nextTok.prev)leading(true)trailing(false)
+                }
+                suggestions.push(suggestion)
+                errormessages.syntaxError("A return statement must have either an expression or a new-line after 'return'.")atRange(
+                    sym.line, sym.linePos, sym.linePos + sym.size - 1)withSuggestions(suggestions)
+            }
             retval := values.pop
         } else {
             retval := ast.identifierNode.new("done", false)
@@ -1781,8 +2940,12 @@ method domethodtype {
     } else {
         if (!accept("rbrace")) then {
             if (lastToken.line == sym.line) then {
-                util.syntax_error("Multiple methods on same line in type, "
-                    ++ "after '{meth.value}'.")
+                def suggestion = errormessages.suggestion.new
+                def newLine = util.lines[sym.line].substringFrom(1)to(lastToken.linePos - 1) ++ sym.value
+                suggestion.addLine(sym.line + 0.1, newLine)
+                suggestion.deleteToken(sym)leading(true)trailing(true)
+                errormessages.syntaxError("Each method must be on a separate line in a type.")atPosition(
+                    sym.line, sym.linePos)withSuggestion(suggestion)
             }
         }
     }
@@ -1795,7 +2958,7 @@ method doanontype {
         auto_count := auto_count + 1
         next
         while {accept("rbrace").not} do {
-            expectConsume {domethodtype}
+            domethodtype
             methods.push(values.pop)
         }
         next
@@ -1808,7 +2971,12 @@ method doanontype {
 method dotype {
     if (accept("keyword") && (sym.value == "type")) then {
         next
-        expect("identifier")
+        if(sym.kind != "identifier") then {
+            def suggestion = errormessages.suggestion.new
+            suggestion.insert(" «type name»")afterToken(lastToken)
+            errormessages.syntaxError("A type declaration must have a name after the 'type'.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size + 1)withSuggestion(suggestion)
+        }
         pushidentifier
         generic
         var p := values.pop
@@ -1818,16 +2986,23 @@ method dotype {
             p := p.value
         }
         def anns = doannotation
-        expect("op")
-        if (sym.value != "=") then {
-            util.syntax_error("Type declarations require '='.")
+        if((sym.kind != "op") || (sym.value != "=")) then {
+            var suggestion := errormessages.suggestion.new
+            def nextTok = findNextToken({ t -> t.kind == "lbrace" })
+            if((nextTok == false).orElse({nextTok == sym})) then {
+                suggestion.insert(" =")afterToken(lastToken)
+            } else {
+                suggestion.replaceTokenRange(sym, nextTok.prev)with("=")
+            }
+            errormessages.syntaxError("A type declaration must have a '=' after the type name.")atPosition(
+                lastToken.line, lastToken.linePos + lastToken.size + 1)withSuggestion(suggestion)
         }
         next
         def methods = []
         if (accept("lbrace")) then {
             next
             while {accept("rbrace").not} do {
-                expectConsume {domethodtype}
+                domethodtype
                 methods.push(values.pop)
             }
             next
@@ -1873,10 +3048,25 @@ method checkIndent {
     } elseif (sym.kind == "eof") then {
     } elseif (sym.indent < minIndentLevel) then {
         if ((sym.linePos - 1) != minIndentLevel) then {
-            util.syntax_error("Block and indentation inconsistent "
-                ++ "for token {sym.kind}: '{sym.value}'; "
-                ++ "indentation is {sym.indent}, must be at least "
-                ++ "{minIndentLevel}.")
+            def suggestions = []
+            var suggestion := errormessages.suggestion.new
+            for(1..(minIndentLevel - (sym.linePos - 1))) do {
+                suggestion.insert(" ")atPosition(1)onLine(sym.line)
+            }
+            suggestions.push(suggestion)
+            suggestion := errormessages.suggestion.new
+            // Find the indent level for the opening brace.
+            var tok := lastToken
+            while {(tok.linePos != (tok.indent + 1)) || (tok.indent >= minIndentLevel)} do { tok := tok.prev }
+            var line := ""
+            for(1..(tok.indent)) do {
+                line := line ++ " "
+            }
+            line := line ++ "}"
+            suggestion.addLine(sym.line - 0.9, line)
+            suggestions.push(suggestion)
+            errormessages.syntaxError("The indentation for this line must be at least {minIndentLevel}. This is often caused by a missing '}'.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
         }
     } elseif (sym.indent > minIndentLevel) then {
         minIndentLevel := sym.indent
@@ -1918,7 +3108,22 @@ method statement {
                 && accept("bind")) then {
                 var dest := values.pop
                 next
-                expectConsume {expression}
+                if(didConsume({expression}).not) then {
+                    def suggestions = []
+                    var suggestion := errormessages.suggestion.new
+                    def nextTok = findNextValidToken("rbrace")
+                    if(nextTok == sym) then {
+                        suggestion.insert(" «expression»")afterToken(lastToken)
+                    } else {
+                        suggestion.replaceTokenRange(sym, nextTok.prev)leading(true)trailing(false)with(" «expression»")
+                    }
+                    suggestions.push(suggestion)
+                    suggestion := errormessages.suggestion.new
+                    suggestion.deleteTokenRange(lastToken, nextTok.prev)leading(true)trailing(false)
+                    suggestions.push(suggestion)
+                    errormessages.syntaxError("A valid expression must follow ':='.")atPosition(
+                        sym.line, sym.linePos)withSuggestions(suggestions)
+                }
                 var val := values.pop
                 var o := ast.bindNode.new(dest, val)
                 values.push(o)
@@ -1941,8 +3146,24 @@ method statement {
 
 method checkUnexpectedTokenAfterStatement {
     if (sym.line == lastToken.line) then {
+        if ((sym.kind == "op") && (sym.value == "=")
+            && (lastToken.kind == "identifier")) then {
+            def sugg = errormessages.suggestion.new
+            sugg.replaceToken(sym)leading(false)trailing(false)with(":=")
+            errormessages.syntaxError("Assignment uses ':=', not '='.")
+                atRange(sym.line, sym.linePos, sym.linePos)withSuggestion(sugg)
+        }
+        if (sym.kind == "rgeneric") then {
+            def sugg = errormessages.suggestion.new
+            sugg.insert(" ")atPosition(sym.linePos)onLine(sym.line)
+            errormessages.syntaxError(
+                    "The '>' operator must have a space before it.")
+                atRange(sym.line, sym.linePos, sym.linePos)
+                withSuggestion(sugg)
+        }
         if (sym.kind != "rbrace") then {
-            util.setPosition(sym.line, sym.linePos)
+            def suggestions = []
+            var suggestion
             if ((values.size > 0).andAlso {
                     (values.last.kind == "identifier").orElse {
                         values.last.kind == "member"
@@ -1950,15 +3171,24 @@ method checkUnexpectedTokenAfterStatement {
                         sym.kind == "identifier"
                     }
                 }) then {
-                util.syntax_error("Unexpected token after statement ended; "
-                    ++ "got {sym.kind}: '{sym.value}', expected "
-                    ++ "new line or semicolon. Did you mean "
-                    ++ "'{values.last.toGrace 0}({sym.value})'?")
-            } else {
-                util.syntax_error("unexpected token after statement ended; "
-                    ++ "got {sym.kind}: '{sym.value}', expected "
-                    ++ "new line or semicolon.")
+                suggestion := errormessages.suggestion.new
+                suggestion.replaceToken(sym)leading(true)trailing(false)with("({sym.value})")
+                suggestions.push(suggestion)
             }
+            def nextTok = findNextValidToken("rbrace")
+            if(nextTok == sym) then {
+                suggestion := errormessages.suggestion.new
+                suggestion.addLine(lastToken.line, util.lines[lastToken.line].substringFrom(1)to(lastToken.linePos + lastToken.size - 1))
+                def newLine = util.lines[sym.line].substringFrom(sym.linePos)to(util.lines[sym.line].size)
+                suggestion.addLine(lastToken.line + 0.1, newLine)
+                suggestions.push(suggestion)
+            } else {
+                suggestion := errormessages.suggestion.new
+                suggestion.deleteTokenRange(sym, nextTok.prev)leading(true)trailing(false)
+                suggestions.push(suggestion)
+            }
+            errormessages.syntaxError("Multiple statements must be separated by a newline or a semicolon. This is often caused by missing parentheses.")atPosition(
+                sym.line, sym.linePos)withSuggestions(suggestions)
         }
     }
 }
@@ -1982,27 +3212,27 @@ method parse(toks) {
     if (util.extensions.contains("DefaultMethodVisibility")) then {
         defaultMethodVisibility := util.extensions.get("DefaultMethodVisibility")
     }
-    var otoks := toks
     if (toks.size == 0) then {
-        return toks
+        return []
     }
-    sym := toks.first
-    tokens := []
+    tokens := toks
+    sym := tokens.first
+    sym.prev := lastToken
+// TODO: Do this in lexer.
     tokens.push(object {
         var kind := "eof"
-        var line := toks.last.line
-        var linePos := util.lines[toks.last.line].size + 1
+        var line := tokens.last.line
+        var linePos := util.lines[tokens.last.line].size + 1
         var indent := 0
         var value := ""
+        def size = 0
+        var next := false
+        var prev := false
     })
-    for (otoks.indices) do { i ->
-        var o := otoks.pop
-        tokens.push(o)
-    }
     util.log_verbose("parsing.")
     linenum := 1
     next
-    var oldlength := tokens.size + 0
+    var oldlength := tokens.size
     while {tokens.size > 0} do {
         blank
         methoddec
@@ -2011,11 +3241,12 @@ method parse(toks) {
         blank
         statement
         if (tokens.size == oldlength) then {
-            util.setPosition(sym.line, sym.linePos)
-            util.syntax_error("No token consumed at top level. Have "
-                ++ "{sym.kind}: '{sym.value}', expected statement.")
+            def suggestion = errormessages.suggestion.new
+            suggestion.deleteToken(sym)
+            errormessages.syntaxError("Invalid statement. This is often caused by an extra '}', ')', or ']'.")atRange(
+                sym.line, sym.linePos, sym.linePos + sym.size - 1)withSuggestion(suggestion)
         }
-        oldlength := tokens.size + 0
+        oldlength := tokens.size
     }
     statement
     values

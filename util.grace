@@ -209,26 +209,40 @@ method outprint(s) {
     outfilev.write(s)
     outfilev.write("\n")
 }
-method syntax_error(s) {
+
+// This is called by various wrapper methods in the errormessages module.
+// The parameters are explained as follows:
+// - message: The text of the error message.
+// - errlinenum: The line number on which the error occurred.
+// - position: A string used to show the position of the error in the error message.
+// - arr: The string used to draw an arrow showing the position of the error.
+// - spacePos: The position in the error line that a space should be inserted, or false.
+// - suggestions: A (possibly empty) list of suggestions to correct the error.
+method syntaxError(message, errlinenum, position, arr, spacePos, suggestions) {
     if (vtagv) then {
         io.error.write("[" ++ vtagv ++ "]")
     }
-    io.error.write("{modnamev}.grace:{linenumv}:{lineposv}: Syntax error: {s}")
-    io.error.write("\n")
-    if (linenumv > 1) then {
-        if (lines.size > 0) then {
-            io.error.write("  {linenumv - 1}: {lines.at(linenumv - 1)}\n")
+    io.error.write("{modnamev}.grace[{errlinenum}{position}]: Syntax error: {message}\n")
+    if ((errlinenum > 1) && (lines.size > 1)) then {
+        io.error.write("  {errlinenum - 1}: {lines.at(errlinenum - 1)}\n")
+    }
+    if (lines.size >= errlinenum) then {
+        var line := lines.at(errlinenum)
+        if(spacePos != false) then {
+            io.error.write("  {errlinenum}: {line.substringFrom(1)to(spacePos-1)} {line.substringFrom(spacePos)to(line.size)}\n")
+        } else {
+            io.error.write("  {errlinenum}: {line}\n")
         }
+        io.error.write("{arr}\n")
     }
-    var arr := "----"
-    for (2..(lineposv + linenumv.asString.size)) do {
-        arr := arr ++ "-"
+    if (errlinenum < lines.size) then {
+        io.error.write("  {errlinenum + 1}: {lines.at(errlinenum + 1)}\n")
     }
-    if (lines.size >= linenumv) then {
-        io.error.write("  {linenumv}: {lines.at(linenumv)}\n{arr}^\n")
-    }
-    if (linenumv < lines.size) then {
-        io.error.write("  {linenumv + 1}: {lines.at(linenumv + 1)}\n")
+    if (suggestions.size > 0) then {
+        for(suggestions) do { s ->
+            io.error.write("\nDid you mean:\n")
+            s.print
+        }
     }
     if (interactivev.not) then {
         sys.exit(1)
@@ -236,6 +250,7 @@ method syntax_error(s) {
         errno := 1
     }
 }
+
 method type_error(s) {
     if (extensionsv.contains("IgnoreTypes")) then {
         return true

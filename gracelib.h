@@ -98,7 +98,7 @@ Object alloc_Boolean(int val);
 Object alloc_Octets(const char *data, int len);
 Object alloc_ConcatString(Object, Object);
 Object alloc_Undefined();
-Object alloc_none();
+Object alloc_done();
 Object alloc_ellipsis();
 Object alloc_MatchFailed();
 Object matchCase(Object, Object*, int, Object);
@@ -138,6 +138,10 @@ void setline(int);
 void gracedie(char *msg, ...);
 
 void grace_register_shutdown_function(void(*)());
+void grace_iterate(Object iterable, void(*callback)(Object, void *),
+        void *userdata);
+Object alloc_SuccessfulMatch(Object result, Object bindings);
+Object alloc_FailedMatch(Object result, Object bindings);
 
 char *grcstring(Object);
 
@@ -155,6 +159,7 @@ void gc_frame_setslot(int, Object);
 Object Object_Equals(Object, int, int *, Object*, int);
 Object Object_NotEquals(Object, int, int *, Object*, int);
 Object Object_asString(Object, int, int *, Object*, int);
+Object Singleton_asString(Object, int, int *, Object*, int);
 
 // These are used by code generation, and shouldn't need to be
 // used elsewhere.

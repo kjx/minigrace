@@ -6,6 +6,7 @@ import "util" as util
 import "mgcollections" as mgcollections
 import "xmodule" as xmodule
 import "mirrors" as mirrors
+import "errormessages" as errormessages
 
 var tmp
 var indent := ""
@@ -30,6 +31,7 @@ var compilationDepth := 0
 def staticmodules = mgcollections.set.new
 def topLevelTypes = mgcollections.map.new
 var dialectHasAtModuleEnd := false
+var debugMode := false
 
 method increaseindent() {
     indent := indent ++ "  "
@@ -41,6 +43,18 @@ method decreaseindent() {
     } else {
         indent := indent.substringFrom(1)to(indent.size - 2)
     }
+}
+
+method formatModname(name) {
+    var snm := "gracecode_"
+    for (name) do {c->
+        if (c == "/") then {
+            snm := snm ++ "$"
+        } else {
+            snm := snm ++ c
+        }
+    }
+    snm
 }
 
 method out(s) {
@@ -113,6 +127,7 @@ method compilearray(o) {
 }
 method compilemember(o) {
     // Member in value position is actually a nullary method call.
+    util.setline(o.line)
     var c := ast.callNode.new(o, [ast.callWithPart.new(o.value)])
     var r := compilenode(c)
     o.register := r
@@ -193,6 +208,7 @@ method compileobjdefdec(o, selfr, pos) {
     if (o.dtype != false) then {
         linenum := o.line
         out "lineNumber = {linenum};"
+        out "moduleName = \"{modname}\";"
         out "if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
         out "  [1], {val})))"
         out "    throw new GraceExceptionPacket(TypeErrorObject,"
@@ -250,6 +266,7 @@ method compileobjvardec(o, selfr, pos) {
         }
         linenum := o.line
         out "lineNumber = {linenum};"
+        out "moduleName = \"{modname}\";"
         out "if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
         out "  [1], {val})))"
         out "    throw new GraceExceptionPacket(TypeErrorObject,"
@@ -258,6 +275,7 @@ method compileobjvardec(o, selfr, pos) {
     }
 }
 method compileclass(o) {
+    util.setline(o.line)
     var signature := o.signature
     var mbody := [ast.objectNode.new(o.value, o.superclass)]
     var newmeth := ast.methodNode.new(o.constructor, signature, mbody,
@@ -266,7 +284,10 @@ method compileclass(o) {
         newmeth.generics := o.generics
     }
     newmeth.properties.put("fresh", true)
-    var obody := [newmeth]
+    def dbBody = [ast.stringNode.new("class {o.name.value}")]
+    def dbMeth = ast.methodNode.new(
+        ast.identifierNode.new("asDebugString", false), [], dbBody, false)
+    var obody := [newmeth, dbMeth]
     var cobj := ast.objectNode.new(obody, false)
     var con := ast.defDecNode.new(o.name, cobj, false)
     if ((compilationDepth == 1) && {o.name.kind != "generic"}) then {
@@ -292,6 +313,8 @@ method compileobject(o, outerRef, inheritingObject) {
         }
     }
     out("var " ++ selfr ++ " = Grace_allocObject();")
+    out "{selfr}.definitionModule = \"{modname}\";"
+    out "{selfr}.definitionLine = {o.line};"
     if (inheritingObject) then {
         out "var inho{myc} = inheritingObject;"
         out "while (inho{myc}.superobj) inho{myc} = inho{myc}.superobj;"
@@ -458,17 +481,28 @@ method compilemethod(o, selfobj) {
     out("var func" ++ myc ++ " = function(argcv) \{")
     increaseindent
     out("var curarg = 1;")
+    if (debugMode) then {
+        out "var myframe = new StackFrame(\"{name}\");"
+    }
     for (o.signature.indices) do { partnr ->
         var part := o.signature[partnr]
         for (part.params) do { p ->
             out("var {varf(p.value)} = arguments[curarg];")
             out("curarg++;")
+            if (debugMode) then {
+                out "myframe.addVar(\"{escapestring(p.value)}\","
+                out "  function() \{return {varf(p.value)};});"
+            }
         }
         if (part.vararg != false) then {
             out("var {varf(part.vararg.value)} = new GraceList("
                 ++ "Array.prototype.slice.call(arguments, curarg, "
                 ++ "curarg + argcv[{partnr - 1}] - {part.params.size}));")
             out("curarg += argcv[{partnr - 1}] - {part.params.size};")
+            if (debugMode) then {
+                out "myframe.addVar(\"{escapestring(part.vararg.value)}\","
+                out "  function() \{return {varf(part.vararg.value)};});"
+            }
         } else {
             if (!o.selfclosure) then {
                 out "if (argcv[{partnr - 1}] !=  func{myc}.paramCounts[{partnr - 1}])"
@@ -503,6 +537,7 @@ method compilemethod(o, selfobj) {
                         if (p.dtype.value == g.value) then {
                             linenum := o.line
                             out "lineNumber = {linenum};"
+                            out "moduleName = \"{modname}\";"
                             out "if (!Grace_isTrue(callmethod({compilenode(p.dtype)}, \"match\","
                             out "  [1], arguments[curarg2])))"
                             out "    throw new GraceExceptionPacket(TypeErrorObject,"
@@ -525,15 +560,25 @@ method compilemethod(o, selfobj) {
     }
     out("var returnTarget = invocationCount;")
     out("invocationCount++;")
+    out "moduleName = \"{modname}\";"
+    if (debugMode) then {
+        out "stackFrames.push(myframe);"
+    }
     out("try \{")
     increaseindent
     var ret := "undefined"
     for (o.body) do { l ->
         ret := compilenode(l)
     }
+    if (debugMode) then {
+        out "stackFrames.pop();"
+    }
     out("return " ++ ret)
     decreaseindent
     out("\} catch(e) \{")
+    if (debugMode) then {
+        out "stackFrames.pop();"
+    }
     out("  if ((e.exctype == 'return') && (e.target == returnTarget)) \{")
     out("    return e.returnvalue;")
     out("  \} else \{")
@@ -570,6 +615,8 @@ method compilemethod(o, selfobj) {
     }
     out "];"
     out("{selfobj}.methods[\"{name}\"] = func{myc};")
+    out "func{myc}.definitionLine = {o.line};"
+    out "func{myc}.definitionModule = \"{modname}\";"
     if (o.properties.contains("fresh")) then {
         compilefreshmethod(o, selfobj)
     }
@@ -784,6 +831,9 @@ method compiledefdec(o) {
         snm := o.name.value
     }
     nm := snm
+    if (debugMode) then {
+        out "myframe.addVar(\"{escapestring(nm)}\", function() \{return {varf(nm)}});"
+    }
     declaredvars.push(nm)
     var val := compilenode(o.value)
     out("var " ++ varf(nm) ++ " = " ++ val ++ ";")
@@ -797,6 +847,7 @@ method compiledefdec(o) {
     if (o.dtype != false) then {
         linenum := o.line
         out "lineNumber = {linenum};"
+        out "moduleName = \"{modname}\";"
         out "if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
         out "  [1], {varf(nm)})))"
         out "    throw new GraceExceptionPacket(TypeErrorObject,"
@@ -816,6 +867,9 @@ method compilevardec(o) {
         out("var " ++ varf(nm) ++ ";")
         val := "false"
     }
+    if (debugMode) then {
+        out "myframe.addVar(\"{escapestring(nm)}\", function() \{return {varf(nm)}});"
+    }
     if (compilationDepth == 1) then {
         compilenode(ast.methodNode.new(o.name, [ast.signaturePart.new(o.name.value)],
             [o.name], false))
@@ -829,6 +883,7 @@ method compilevardec(o) {
         if (val != "false") then {
             linenum := o.line
             out "lineNumber = {linenum};"
+            out "moduleName = \"{modname}\";"
             out "if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
             out "  [1], {varf(nm)})))"
             out "    throw new GraceExceptionPacket(TypeErrorObject,"
@@ -1048,41 +1103,25 @@ method compileoctets(o) {
 }
 method compiledialect(o) {
     out("// Dialect import of {o.value}")
-    var snm := ""
-    for (o.value) do {c->
-        if (c == "/") then {
-            snm := ""
-        } else {
-            snm := snm ++ c
-        }
-    }
     var fn := escapestring(o.value)
-    out("this.outer = do_import(\"{fn}\", gracecode_{snm});")
+    out("this.outer = do_import(\"{fn}\", {formatModname(o.value)});")
     out("var Grace_prelude = this.outer;")
     o.register := "undefined"
 }
 method compileimport(o) {
     out("// Import of " ++ o.path)
-    var snm := ""
-    for (o.path) do {c->
-        if (c == "/") then {
-            snm := ""
-        } else {
-            snm := snm ++ c
-        }
-    }
     var nm := escapestring(o.value)
     var fn := escapestring(o.path)
-    out("if (typeof gracecode_{snm} == 'undefined')")
+    out("if (typeof {formatModname(o.path)} == 'undefined')")
     out "  throw new GraceExceptionPacket(RuntimeErrorObject, "
-    out "    new GraceString('could not find module {snm}'));"
-    out("var " ++ varf(nm) ++ " = do_import(\"{fn}\", gracecode_{snm});")
+    out "    new GraceString('could not find module {o.value}'));"
+    out("var " ++ varf(nm) ++ " = do_import(\"{fn}\", {formatModname(o.path)});")
     if (o.dtype != false) then {
         out "if (!Grace_isTrue(callmethod({compilenode(o.dtype)}, \"match\","
         out "  [1], {varf(nm)})))"
         out "    throw new GraceExceptionPacket(TypeErrorObject,"
         out "          new GraceString(\"expected \""
-        out "          + \"module {snm} to be of type {o.dtype.value}\"))";
+        out "          + \"module {o.value} to be of type {o.dtype.value}\"))";
     }
     o.register := "undefined"
 }
@@ -1222,8 +1261,8 @@ method addTransitiveImports(filepath, epath) {
     if (data.contains("modules")) then {
         for (data.get("modules")) do {m->
             if (m == util.modname) then {
-                util.syntax_error("Cyclic import detected: '{m}' is imported "
-                    ++ "by '{epath}', which is imported by '{m}' (and so on).")
+                errormessages.syntaxError("Cyclic import detected: '{m}' is imported "
+                    ++ "by '{epath}', which is imported by '{m}' (and so on).")atLine(1)
             }
             checkimport(m)
         }
@@ -1231,8 +1270,8 @@ method addTransitiveImports(filepath, epath) {
     if (data.contains("path")) then {
         def path = data.get("path").first
         if (path != epath) then {
-            util.syntax_error("Imported module '{epath}' compiled with"
-                ++ " different path '{path}'.")
+            errormessages.syntaxError("Imported module '{epath}' compiled with"
+                ++ " different path '{path}'.")atLine(1)
         }
     }
 }
@@ -1285,12 +1324,13 @@ method processDialect(values') {
                 }
             } case { e : RuntimeError ->
                 util.setPosition(v.line, 1)
-                util.syntax_error("Dialect '{nm}' failed to load: {e}.")
+                errormessages.syntaxError("Dialect '{nm}' failed to load: {e}.")atLine(v.line)
             } case { e : CheckerFailure ->
-                if (nothing != e.data) then {
+                if (done != e.data) then {
                     util.setPosition(e.data.line, e.data.linePos)
+                    errormessages.syntaxError("Dialect failure: {e.message}.")atPosition(e.data.line, e.data.linePos)
                 }
-                util.syntax_error("Dialect failure: {e.message}.")
+                errormessages.syntaxError("Dialect failure: {e.message}.")atPosition(util.linenum, 0)
             }
         }
     }
@@ -1304,6 +1344,9 @@ method compile(vl, of, mn, rm, bt, glpath) {
     runmode := rm
     buildtype := bt
     gracelibPath := glpath
+    if (util.extensions.contains("Debug")) then {
+        debugMode := true
+    }
     util.log_verbose("generating ECMAScript code.")
     topLevelTypes.put("String", true)
     topLevelTypes.put("Number", true)
@@ -1317,10 +1360,16 @@ method compile(vl, of, mn, rm, bt, glpath) {
         }
     }
     util.setline(1)
-    out("function gracecode_" ++ modname ++ "() \{")
+    out("function {formatModname(modname)} () \{")
     increaseindent
     if (util.extensions.contains("NativePrelude")) then {
         out("var Grace_prelude = window.Grace_native_prelude;")
+    }
+    out "this.definitionModule = \"{modname}\";"
+    out "this.definitionLine = 0;"
+    if (debugMode) then {
+        out "myframe = new StackFrame(\"{modname} module\");"
+        out "stackFrames.push(myframe);"
     }
     for (values) do { o ->
         if (o.kind == "method") then {
@@ -1332,6 +1381,7 @@ method compile(vl, of, mn, rm, bt, glpath) {
             out("var type_{typeid} = var_{typeid};")
         }
     }
+    def imported = mgcollections.list.new
     for (values) do { o ->
         if (o.kind == "inherits") then {
             def sup = compilenode(o.value)
@@ -1342,19 +1392,40 @@ method compile(vl, of, mn, rm, bt, glpath) {
         if ((o.kind != "method") && (o.kind != "type")) then {
             compilenode(o)
         }
+        if (o.kind == "import") then {
+            imported.push(o.path)
+        }
+        if (o.kind == "dialect") then {
+            imported.push(o.value)
+        }
     }
     if (dialectHasAtModuleEnd) then {
         out("callmethod(Grace_prelude,\"atModuleEnd\", [1], this);")
     }
+    if (debugMode) then {
+        out "stackFrames.pop();"
+    }
     out("return this;")
     decreaseindent
     out("\}")
+    out "{formatModname(modname)}.imports = ["
+    for (imported) do {imp->
+        out "'{imp}',"
+    }
+    out "];"
     xmodule.writeGCT(modname, modname ++ ".gct")
         fromValues(values)modules(staticmodules)
     def gct = xmodule.parseGCT(modname, modname ++ ".gct")
     def gctText = xmodule.gctAsString(gct)
     out "if (gctCache)"
     out "  gctCache['{escapestring(modname)}'] = \"{escapestring(gctText)}\";"
+    out "if (originalSourceLines) \{"
+    out "  originalSourceLines[\"{modname}\"] = ["
+    for (util.cLines) do {l->
+        out "    \"{l}\","
+    }
+    out "  ];"
+    out "\}"
     for (output) do { o ->
         outprint(o)
     }

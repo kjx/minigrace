@@ -48,6 +48,7 @@ var importHook := false
 var subprocesses := collections.list.new
 var linkfiles := collections.list.new
 var dialectHasAtModuleEnd := false
+var dialectHasAtModuleStart := false
 
 method out(s) {
     output.push(s)
@@ -475,12 +476,15 @@ method compileobject(o, outerRef) {
     out("  selfslot = &stackframe->slots[0];")
     out("  *selfslot = self;")
     out("  setframeelementname(stackframe, 0, \"self\");")
+    out "  Object thisouter{myc} = (*(struct UserObject *)self).data[0], lowerouter{myc} = thisouter{myc};"
     out "  if (inheritingObject{myc}) \{"
     out "    struct UserObject *inho{myc} = (struct UserObject *)inheritingObject{myc};"
     out "    while (inho{myc}->super != GraceDefaultObject) inho{myc} = (struct UserObject *)inho{myc}->super;"
     out "    inho{myc}->super = {selfr};"
     out "    self = inheritingObject{myc};"
     out "    *selfslot = self;"
+    out "    lowerouter{myc} = (*(struct UserObject *)self).data[0];"
+    out "    (*(struct UserObject *)self).data[0] = thisouter{myc};"
     out "  \}"
     for (o.value) do { e ->
         if (e.kind == "method") then {
@@ -554,6 +558,7 @@ method compileobject(o, outerRef) {
     out("objclass{myc} = {selfr}->class;")
     out("  objclass{myc}->definitionModule = modulename;")
     out("  objclass{myc}->definitionLine = {o.line};")
+    out "  (*(struct UserObject *)self).data[0] = lowerouter{myc};"
     out("  self = oldself{myc};")
     out("  selfslot = oldselfslot{myc};")
     out("  stackframe = oldstackframe{myc};")
@@ -1519,6 +1524,12 @@ method compiledialect(o) {
     globals.push("Object {modg}_init();")
     globals.push("Object {modg};")
     auto_count := auto_count + 1
+    if (dialectHasAtModuleEnd) then {
+        out("  partcv[0] = 1;")
+        out("  params[0] = alloc_String(\"{escapestring(modname)}\");")
+        out("  callmethodflags(prelude, \"atModuleStart\", "
+            ++ "1, partcv, params, CFLAG_SELF);")
+    }
     o.register := "done"
 }
 method compileimport(o) {
@@ -1903,6 +1914,9 @@ method processImports(values') {
                         }
                         if (m.name == "atModuleEnd") then {
                             dialectHasAtModuleEnd := true
+                        }
+                        if (m.name == "atModuleStart") then {
+                            dialectHasAtModuleStart := true
                         }
                     }
                 } case { e : RuntimeError ->

@@ -325,6 +325,7 @@ GraceList.prototype = {
     methods: {
         "push": function(argcv, val) {
             this._value.push(val);
+            return var_done;
         },
         "size": function(argcv) {
             //dbg("called size: " + this._value.length);
@@ -345,9 +346,11 @@ GraceList.prototype = {
         },
         "at()put": function(argcv, idx, val) {
             this._value[idx._value-1] = val;
+            return var_done;
         },
         "[]:=": function(argcv, idx, val) {
             this._value[idx._value-1] = val;
+            return var_done;
         },
         "asString": function(argcv) {
             var s = "[";
@@ -416,6 +419,10 @@ GraceList.prototype = {
         "asDebugString": function(argcv) {
             return callmethod(this, "asString", [0]);
         },
+        "++": function(argcv, other) {
+            var l = this._value.concat(other._value);
+            return new GraceList(l);
+        }
     },
     className: "List",
     definitionModule: "unknown",
@@ -445,9 +452,11 @@ GracePrimitiveArray.prototype = {
         },
         "at()put": function(argcv, idx, val) {
             this._value[idx._value] = val;
+            return var_done;
         },
         "[]:=": function(argcv, idx, val) {
             this._value[idx._value] = val;
+            return var_done;
         },
         "asString": function(argcv) {
             var s = "[";
@@ -827,7 +836,7 @@ function GraceBlock_match(argcv, o) {
         var rv = callmethod(this, "applyIndirectly", [1], bindings);
         return new GraceSuccessfulMatch(rv);
     }
-    return new GraceFailedMatch(rv);
+    return new GraceFailedMatch(o);
 }
 
 function classType(obj) {
@@ -1515,6 +1524,8 @@ function checkmethodcall(func, methname, obj, args) {
         var p = pt[i];
         if (!p || p.length == 0)
             continue;
+        if (!args[i])
+            continue;
         var t = p[0];
         if (!Grace_isTrue(callmethod(t, "match", [1], args[i]))) {
             throw new GraceExceptionPacket(RuntimeErrorObject,
@@ -1540,7 +1551,8 @@ function callmethodsuper(obj, methname, argcv) {
 function callmethod(obj, methname, argcv) {
     if (typeof obj == 'undefined')
         throw new GraceExceptionPacket(RuntimeErrorObject,
-                new GraceString("Requested method on uninitialised value."));;
+                new GraceString("Requested method on uninitialised value "
+                    + "around " + moduleName + ":" + lineNumber));;
     if (obj === undefined || !obj.methods)
         debugger
     var meth = obj.methods[methname];
@@ -1602,7 +1614,9 @@ function callmethod(obj, methname, argcv) {
     for (var i=0; i<args.length; i++)
         if (typeof args[i] == 'undefined')
             throw new GraceExceptionPacket(RuntimeErrorObject,
-                    new GraceString("Uninitialised value used as argument."));;
+                    new GraceString("Uninitialised value used as argument "
+                        + "to " + methname + " "
+                        + "around " + moduleName + ":" + lineNumber));;
     if (meth.paramTypes)
         checkmethodcall(meth, methname, obj, args);
     args.unshift(argcv)

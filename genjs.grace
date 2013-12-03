@@ -31,6 +31,7 @@ var compilationDepth := 0
 def staticmodules = mgcollections.set.new
 def topLevelTypes = mgcollections.map.new
 var dialectHasAtModuleEnd := false
+var dialectHasAtModuleStart := false
 var debugMode := false
 
 method increaseindent() {
@@ -213,7 +214,7 @@ method compileobjdefdec(o, selfr, pos) {
         out "  [1], {val})))"
         out "    throw new GraceExceptionPacket(TypeErrorObject,"
         out "          new GraceString(\"expected \""
-        out "          + \"initial value of def '{o.name.value}' to be of type {o.dtype.value}\"))";
+        out "          + \"initial value of def '{o.name.value}' to be of type {escapestring(o.dtype.toGrace(0))}\"))";
     }
 }
 method compileobjvardec(o, selfr, pos) {
@@ -1106,6 +1107,10 @@ method compiledialect(o) {
     var fn := escapestring(o.value)
     out("this.outer = do_import(\"{fn}\", {formatModname(o.value)});")
     out("var Grace_prelude = this.outer;")
+    if (dialectHasAtModuleStart) then {
+        out "callmethod(Grace_prelude,\"atModuleStart\", [1], "
+        out "  new GraceString(\"{escapestring(modname)}\"));"
+    }
     o.register := "undefined"
 }
 method compileimport(o) {
@@ -1320,6 +1325,9 @@ method processDialect(values') {
                     }
                     if (m.name == "atModuleEnd") then {
                         dialectHasAtModuleEnd := true
+                    }
+                    if (m.name == "atModuleStart") then {
+                        dialectHasAtModuleStart := true
                     }
                 }
             } case { e : RuntimeError ->

@@ -758,14 +758,15 @@ method compilewhile(o) {
 method compileif(o) {
     var myc := auto_count
     auto_count := auto_count + 1
+    out "var if{myc} = var_done;"
     out("if (Grace_isTrue(" ++ compilenode(o.value) ++ ")) \{")
     increaseindent
-    var tret := "undefined"
-    var fret := "undefined"
+    var tret := "var_done"
+    var fret := "var_done"
     for (o.thenblock) do { l->
         tret := compilenode(l)
     }
-    out("var if" ++ myc ++ " = " ++ tret ++ ";")
+    out("if" ++ myc ++ " = " ++ tret ++ ";")
     decreaseindent
     if (o.elseblock.size > 0) then {
         out("\} else \{")
@@ -773,7 +774,7 @@ method compileif(o) {
         for (o.elseblock) do { l->
             fret := compilenode(l)
         }
-        out("var if" ++ myc ++ " = " ++ fret ++ ";")
+        out("if" ++ myc ++ " = " ++ fret ++ ";")
         decreaseindent
     }
     out("\}")
@@ -1332,13 +1333,13 @@ method processDialect(values') {
                 }
             } case { e : RuntimeError ->
                 util.setPosition(v.line, 1)
-                errormessages.syntaxError("Dialect '{nm}' failed to load: {e}.")atLine(v.line)
+                errormessages.error("Dialect error: Dialect '{nm}' failed to load: {e}.")atLine(v.line)
             } case { e : CheckerFailure ->
                 if (done != e.data) then {
                     util.setPosition(e.data.line, e.data.linePos)
-                    errormessages.syntaxError("Dialect failure: {e.message}.")atPosition(e.data.line, e.data.linePos)
+                    errormessages.error("{e.exception}: {e.message}.")atPosition(e.data.line, e.data.linePos)
                 }
-                errormessages.syntaxError("Dialect failure: {e.message}.")atPosition(util.linenum, 0)
+                errormessages.error("{e.exception}: {e.message}.")atPosition(util.linenum, 0)
             }
         }
     }

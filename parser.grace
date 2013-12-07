@@ -359,6 +359,7 @@ method dotyperef {
             errormessages.syntaxError("A type name or type expression must follow '|'.")atPosition(
                 sym.line, sym.linePos)withSuggestions(suggestions)
         }
+        unionTypes.push(values.pop)
     }
     if (unionTypes.size > 0) then {
         var unionName := "Union<"
@@ -1894,6 +1895,7 @@ method callrest {
                 meth := methn
             }
         }
+        util.setline(lnum)
         tmp := ast.callNode.new(meth, signature)
         tmp.generics := genericIdents
         values.push(tmp)

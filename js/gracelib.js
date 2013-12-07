@@ -983,6 +983,7 @@ stdin.methods.close = function() {};
 var stderr = Grace_allocObject();
 stderr.methods.write = function(junk, s) {
     minigrace.stderr_write(s._value);
+    return var_done;
 }
 stderr.methods.close = function() {};
 
@@ -997,6 +998,7 @@ function StackFrame(methodName) {
 StackFrame.prototype = {
     addVar: function(name, accessor) {
         this.variables[name] = accessor;
+        return var_done;
     },
     getVar: function(name) {
         return this.variables[name]();
@@ -1004,6 +1006,7 @@ StackFrame.prototype = {
     forEach: function(f) {
         for (var v in this.variables)
             f(v, this.getVar(v));
+        return var_done;
     },
 };
 
@@ -1221,6 +1224,7 @@ function gracecode_util() {
             return stdin;
         },
         parseargs: function(argcv) {
+            return var_done;
         },
         target: function(argcv) {
             return new GraceString(minigrace.mode);
@@ -1242,6 +1246,7 @@ function gracecode_util() {
             lineNumber = l._value;
             this._linenum = l;
             this._linepos = p;
+            return var_done;
         },
         buildtype: function(argcv) {
             return new GraceString("normal");
@@ -1258,15 +1263,18 @@ function gracecode_util() {
         log_verbose: function(argcv, s) {
             if (minigrace.verbose)
                 minigrace.stderr_write("minigrace: " + minigrace.modname + ': ' + s._value + "\n");
+            return var_done;
         },
         outprint: function(argcv, s) {
             minigrace.stdout_write(s._value + "\n");
+            return var_done;
         },
         engine: function(argcv) {
             return new GraceString("js");
         },
         debug: function(argcv, s) {
             dbg(s._value);
+            return var_done;
         },
         interactive: function(argcv) {
             return new GraceBoolean(false);
@@ -1285,8 +1293,12 @@ function gracecode_util() {
         // - spacePos: The position in the error line that a space should be inserted, or false.
         // - suggestions: A (possibly empty) list of suggestions to correct the error.
         "syntaxError": function(argcv, message, errlinenum, position, arr, spacePos, suggestions) {
+            callmethod(this, "generalError", [6], new GraceString("Syntax error: " + message._value), errlinenum,
+                position, arr, spacePos, suggestions);
+        },
+        "generalError": function(argcv, message, errlinenum, position, arr, spacePos, suggestions) {
             minigrace.stderr_write(minigrace.modname + ".grace[" + errlinenum._value + position._value
-                + "]: Syntax error: " + message._value + "\n");
+                + "]: " + message._value + "\n");
 
             if ((errlinenum._value > 1) && (callmethod(this._lines, "size", [0])._value > 1))
                 minigrace.stderr_write("  " + (errlinenum._value - 1) + ": "
@@ -1398,6 +1410,7 @@ function gracecode_util() {
                 extv = new GraceBoolean(true);
             }
             callmethod(extensionsMap, "put", [2], extn, extv);
+            return var_done;
         },
         "lines": function(argcv) {
             return this._lines;
@@ -1741,6 +1754,9 @@ GraceException.prototype = {
         "&": function(argcv, o) {
             return new GraceAndPattern(this, o);
         },
+        "asString": function(argcv) {
+            return new GraceString(this.name);
+        },
     },
     className: 'Exception'
 }
@@ -1752,8 +1768,8 @@ function do_import(modname, func) {
         return importedModules[modname];
     }
     if (!func)
-        throw new GraceExceptionPacket(RuntimeErrorObject,
-            new GraceString("Could not find module '" + modname + "'."));
+        throw new GraceExceptionPacket(ImportErrorObject,
+            new GraceString("Could not find module '" + modname + "'"));
     var origSuperDepth = superDepth;
     superDepth = Grace_allocModule(modname);
     var f = func.call(superDepth);
@@ -1801,6 +1817,7 @@ ellipsis.methods.asString = function() {return new GraceString("ellipsis");}
 var ExceptionObject = new GraceException("Exception", false);
 var ErrorObject = new GraceException("Error", ExceptionObject);
 var RuntimeErrorObject = new GraceException("RuntimeError", ErrorObject);
+var ImportErrorObject = new GraceException("ImportError", RuntimeErrorObject);
 var TypeErrorObject = new GraceException("TypeError", RuntimeErrorObject);
 
 var Grace_native_prelude = Grace_allocObject();
@@ -1851,6 +1868,14 @@ Grace_prelude.methods["_methods"] = function() {
 }
 Grace_prelude.methods["clone"] = function(argcv, obj) {
   return obj;
+}
+Grace_prelude.methods["become"] = function(argcv, a, b) {
+    for(var k in a) {
+        var t = a[k];
+        a[k] = b[k];
+        b[k] = t;
+    }
+    return var_done;
 }
 
 var PrimitiveArrayClass = new GraceObject();

@@ -118,6 +118,7 @@ class AndPattern.new(p1, p2) {
 
 class OrPattern.new(p1, p2) {
     inherits BasicPattern.new
+
     method match(o) {
         if (p1.match(o)) then {
             return SuccessfulMatch.new(o, [])
@@ -128,6 +129,7 @@ class OrPattern.new(p1, p2) {
         FailedMatch.new(o)
     }
 }
+
 
 
 def _standardPrelude = self
@@ -165,7 +167,19 @@ method methods {
 
 
 
-//KJX evil changes 
+
+
+
+
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// EVIL
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 
 class Point2D.new(x', y') { 
      def x is readable = x'

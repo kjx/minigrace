@@ -112,6 +112,7 @@ ClassData GreaterThanPattern;
 ClassData LessThanPattern;
 ClassData ExceptionPacket;
 ClassData Exception;
+ClassData Point2D;
 
 Object Dynamic;
 Object List;
@@ -660,17 +661,26 @@ Object alloc_AndPattern(Object l, Object r) {
 
 //--------------------------------------------
 
+//Object module_gtkaux;
+//extern Object module_gtkaux_init();
+
 Object Float64_Point(Object self, int nparts, int *argcv,
         Object *args, int flags) {
     if (nparts < 1 || (nparts >= 1 && argcv[0] < 1))
         die("@ requires an argument");
-    Object other = args[0];
-    assertClass(other, Number);
+  Object other = args[0];
+  assertClass(other, Number);
   Object params[2];
   int partcv[1];
   params[0] = self;
   params[1] = other;
   partcv[0] = 2;
+
+  //  if (module_gtkaux == NULL)
+  //    module_gtkaux = module_gtkaux_init();
+
+  //  return callmethodflags(module_gtkaux, "point", 1, partcv, params, CFLAG_SELF);
+
   return callmethodflags(prelude, "point", 1, partcv, params, CFLAG_SELF);
 }
 
@@ -1501,7 +1511,7 @@ unsigned int uipow(unsigned int base, unsigned int exponent)
   unsigned int r = 1;
   while(1) {
     if(exponent & 1) r *= base;
-    if((exponent >>= 1) == 0)	return r;
+    if((exponent >>= 1) == 0)   return r;
     base *= base;
   }
   return r;

@@ -180,6 +180,7 @@ struct BlockObject {
     jmp_buf *retpoint;
     Object super;
     Object *data;
+    int ndata;
 };
 struct TypeObject {
     OBJECT_HEADER;
@@ -447,6 +448,9 @@ Object gracebecome(Object subObject, Object superObject) {
     sub->data = (Object *)(sup->data);
     sup->class = subclass;
     sup->data = subdata;
+    int tmpndata = sub->ndata;
+    sub->ndata = sup->ndata;
+    sup->ndata = tmpndata;
     return superObject;
 }
 Object graceunbecome(Object topObj) {
@@ -2294,7 +2298,7 @@ Object Boolean_not(Object self, int nparts, int *argcv,
 }
 Object Boolean_Equals(Object self, int nparts, int *argcv,
         Object *args, int flags) {
-    return alloc_Boolean(self == args[0] && ((flags >> 24 && 255) == 0));
+    return alloc_Boolean(self == args[0] && ((flags >> 24 & 255) == 0));
 }
 Object Boolean_NotEquals(Object self, int nparts, int *argcv,
         Object *args, int flags) {
@@ -2939,7 +2943,11 @@ Method *findmethod(Object *selfp, Object *realselfp, const char *name,
     int callflags = *cflags;
     Method *m = NULL;
     ClassData c = self->class;
+    Method *methods = c->methods;
+    char *this_class_name = c->name;
     for (i=0; i < c->nummethods; i++) {
+        Method this_method = c->methods[i];
+        char *this_name = c->methods[i].name;
         if (strcmp(c->methods[i].name, name) == 0) {
             m = &c->methods[i];
             break;
@@ -2995,7 +3003,7 @@ int checkmethodcall(Method *m, int nparts, int *argcv, Object *argv) {
     if (t == NULL || nparts == 0 || argcv == NULL || argv == NULL)
         return 1;
     int partcv[] = {1};
-    for (i = 0; i < nparts, i < t->nparts; i++) {
+    for (i = 0; i < nparts && i < t->nparts; i++) {
         for (j = 0; j < argcv[i] && j < t->argcv[i]; j++) {
             if (t->types[k])
                 if (!istrue(callmethod(t->types[k], "match", 1, partcv, &argv[k]))) {
@@ -3117,10 +3125,8 @@ start:
         return ret;
     }
     if (m) {
-        char buf[1024];
-        sprintf(buf, "Method returned null: %s.%s on line %i. This is a bug in the compiler runtime or an external native module. Terminating the program.\n",
+        fprintf(stderr, "Method returned null: %s.%s on line %i. This is a bug in the compiler runtime or an external native module. Terminating the program.\n",
                 self->class->name, name, linenumber);
-        fprintf(stderr, buf);
         exit(1);
     }
     if (error_jump_set) {
@@ -3778,6 +3784,7 @@ Object alloc_Block(Object self, Object(*body)(Object, int, Object*, int),
             alloc_obj(sizeof(struct BlockObject) - sizeof(struct Object), c));
     o->data = glmalloc(sizeof(Object) * 3);
     o->super = NULL;
+    o->ndata = 3;
     o->flags |= FLAG_BLOCK;
     return (Object)o;
 }
@@ -3796,8 +3803,9 @@ Object setsuperobj(Object sub, Object super) {
 }
 void UserObj__mark(struct UserObject *o) {
     int i;
-    for (i=0; o->data[i] != NULL; i++) {
-        gc_mark(o->data[i]);
+    for (i=0; i<o->ndata; i++) {
+        if (o->data[i])
+            gc_mark(o->data[i]);
     }
     if (o->super)
         gc_mark(o->super);
@@ -3823,8 +3831,8 @@ Object UserObj_Equals(Object self, int nparts, int *argcv,
             Method *om = findmethodsimple(other, m->name);
             if (!om || !(om->flags & MFLAG_DEF))
                 return alloc_Boolean(0);
-            Object myval = callmethod(self, m->name, 0, NULL, NULL);
-            Object otval = callmethod(other, m->name, 0, NULL, NULL);
+            Object myval = callmethodself(self, m->name, 0, NULL, NULL);
+            Object otval = callmethodself(other, m->name, 0, NULL, NULL);
             int partcv[] = {1};
             if (!istrue(callmethod(myval, "==", 1, partcv, &otval)))
                 return alloc_Boolean(0);
@@ -3886,6 +3894,7 @@ Object alloc_userobj2(int numMethods, int numFields, ClassData c) {
     for (i=0; i<numFields; i++)
         uo->data[i] = NULL;
     uo->super = GraceDefaultObject;
+    uo->ndata = numFields;
     return o;
 }
 Object alloc_userobj(int numMethods, int numFields) {
@@ -4456,7 +4465,8 @@ Object grace_prelude() {
     add_Method(c, "become", &prelude_become);
     add_Method(c, "unbecome", &prelude_unbecome);
     add_Method(c, "clone", &prelude_clone);
-    _prelude = alloc_userobj2(0, 7, c);
+    _prelude = alloc_userobj2(0, 0, c);
+    struct UserObject *uo = (struct UserObject *)_prelude;
     gc_root(_prelude);
     prelude = _prelude;
     return _prelude;

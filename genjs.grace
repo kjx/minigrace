@@ -782,6 +782,15 @@ method compileif(o) {
 }
 method compileidentifier(o) {
     var name := o.value
+    if (name == "super") then {
+        def sugg = errormessages.suggestion.new
+        sugg.replaceRange(o.linePos, o.linePos + 4)with "this" onLine(o.line)
+        errormessages.syntaxError("'super' cannot be used except on the "
+                ++ "left-hand side of the . in a method request. "
+                ++ "Use 'this' instead.")
+            atRange(
+                o.line, o.linePos, o.linePos + 4)withSuggestion(sugg)
+    }
     if (name == "self") then {
         o.register := "this"
     } elseif (name == "...") then {
@@ -938,7 +947,6 @@ method compilematchcase(o) {
     o.register := "matchres" ++ myc
 }
 method compileop(o) {
-    var left := compilenode(o.left)
     var right := compilenode(o.right)
     auto_count := auto_count + 1
     var rnm := "opresult"
@@ -954,8 +962,15 @@ method compileop(o) {
     if (o.value == "%") then {
         rnm := "modulus"
     }
-    out("var " ++ rnm ++ auto_count ++ " = callmethod(" ++ left
-        ++ ", \"" ++ o.value ++ "\", [1], " ++ right ++ ");")
+    if ((o.left.kind == "identifier") && (o.left.value == "super")) then {
+        out("var " ++ rnm ++ auto_count ++ " = callmethodsuper(this"
+            ++ ", \"" ++ escapestring(o.value) ++ "\", [1], " ++ right ++ ");")
+    } else {
+        var left := compilenode(o.left)
+        auto_count := auto_count + 1
+        out("var " ++ rnm ++ auto_count ++ " = callmethod(" ++ left
+            ++ ", \"" ++ o.value ++ "\", [1], " ++ right ++ ");")
+    }
     o.register := rnm ++ auto_count
     auto_count := auto_count + 1
 }

@@ -4,7 +4,7 @@ ARCH:=$(shell uname -s)-$(shell uname -m)
 STABLE=fc50ae14211c9e09db1942ba2f56dadfa565a6aa
 all: minigrace $(OTHER_MODULES)
 
-REALSOURCEFILES = compiler.grace errormessages.grace util.grace ast.grace lexer.grace parser.grace genjs.grace genc.grace mgcollections.grace interactive.grace xmodule.grace identifierresolution.grace genjson.grace
+REALSOURCEFILES = compiler.grace errormessages.grace util.grace ast.grace lexer.grace parser.grace genjs.grace genc.grace mgcollections.grace interactive.grace xmodule.grace identifierresolution.grace genjson.grace 
 SOURCEFILES = $(REALSOURCEFILES) buildinfo.grace
 JSSOURCEFILES = js/compiler.js js/errormessages.js js/ast.js js/lexer.js js/parser.js js/genjs.js js/genc.js js/mgcollections.js js/xmodule.js js/identifierresolution.js js/buildinfo.js js/genjson.js
 
@@ -26,9 +26,9 @@ buildinfo.grace: $(REALSOURCEFILES) StandardPrelude.grace gracelib.c
 gracelib-basic.o: gracelib.c gracelib.h
 	gcc -g -std=c99 -o gracelib-basic.o -c gracelib.c
 
-gracelib.o: gracelib-basic.o debugger.o l1/minigrace StandardPrelude.grace
+gracelib.o: gracelib-basic.o debugger.o l1/minigrace StandardPrelude.grace 
 	l1/minigrace --make --noexec -XNoMain -XNativePrelude StandardPrelude.grace
-	ld -o gracelib.o -r gracelib-basic.o StandardPrelude.gcn debugger.o
+	ld -o gracelib.o -r gracelib-basic.o StandardPrelude.gcn  debugger.o
 
 curl.gso: curl.c gracelib.h
 	gcc -g -std=c99 $(UNICODE_LDFLAGS) -o curl.gso -shared -fPIC curl.c -lcurl

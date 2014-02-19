@@ -471,7 +471,7 @@ method compilemethod(o, selfobj) {
     for (o.signature) do { part ->
         for (part.params) do {p->
             if (p.dtype != false) then {
-                if ((p.dtype.value != "Dynamic")
+                if ((p.dtype.value != "Unknown")
                     && ((p.dtype.kind == "identifier")
                         || (p.dtype.kind == "type"))) then {
                     haveTypedParams := true
@@ -525,7 +525,7 @@ method compilemethod(o, selfobj) {
         }
         out("\} else \{")
         for (o.generics) do {g->
-            out("  {varf(g.value)} = var_Dynamic;")
+            out("  {varf(g.value)} = var_Unknown;")
         }
         out("\}")
         out("// End generics")
@@ -567,7 +567,7 @@ method compilemethod(o, selfobj) {
     }
     out("try \{")
     increaseindent
-    var ret := "undefined"
+    var ret := "var_done"
     for (o.body) do { l ->
         ret := compilenode(l)
     }
@@ -631,7 +631,7 @@ method compilefreshmethod(o, selfobj) {
     for (o.signature) do { part ->
         for (part.params) do {p->
             if (p.dtype != false) then {
-                if ((p.dtype.value != "Dynamic")
+                if ((p.dtype.value != "Unknown")
                     && ((p.dtype.kind == "identifier")
                         || (p.dtype.kind == "type"))) then {
                     haveTypedParams := true
@@ -668,7 +668,7 @@ method compilefreshmethod(o, selfobj) {
         }
         out("\} else \{")
         for (o.generics) do {g->
-            out("  {varf(g.value)} = var_Dynamic;")
+            out("  {varf(g.value)} = var_Unknown;")
         }
         out("\}")
         out("// End generics")
@@ -717,7 +717,7 @@ method compilemethodtypes(func, o) {
     for (o.signature) do { part ->
         for (part.params) do {p->
             // We store information for static top-level types only:
-            // absent information is treated as Dynamic (and unchecked).
+            // absent information is treated as Unknown (and unchecked).
             if (false != p.dtype) then {
                 if ((p.dtype.kind == "identifier")
                     || (p.dtype.kind == "type")) then {
@@ -784,10 +784,10 @@ method compileidentifier(o) {
     var name := o.value
     if (name == "super") then {
         def sugg = errormessages.suggestion.new
-        sugg.replaceRange(o.linePos, o.linePos + 4)with "this" onLine(o.line)
+        sugg.replaceRange(o.linePos, o.linePos + 4)with "self" onLine(o.line)
         errormessages.syntaxError("'super' cannot be used except on the "
                 ++ "left-hand side of the . in a method request. "
-                ++ "Use 'this' instead.")
+                ++ "Use 'self' instead.")
             atRange(
                 o.line, o.linePos, o.linePos + 4)withSuggestion(sugg)
     }
@@ -1341,7 +1341,7 @@ method processDialect(values') {
             checkimport(nm)
             log_verbose("loading dialect for checkers.")
             def CheckerFailure = Exception.refine "CheckerFailure"
-            catch {
+            try {
                 def dobj = mirrors.loadDynamicModule(nm)
                 def mths = mirrors.reflect(dobj).methods
                 for (mths) do { m->
@@ -1356,10 +1356,10 @@ method processDialect(values') {
                         dialectHasAtModuleStart := true
                     }
                 }
-            } case { e : RuntimeError ->
+            } catch { e : RuntimeError ->
                 util.setPosition(v.line, 1)
                 errormessages.error("Dialect error: Dialect '{nm}' failed to load: {e}.")atLine(v.line)
-            } case { e : CheckerFailure ->
+            } catch { e : CheckerFailure ->
                 match (e.data)
                     case { lp : LinePos ->
                         util.setPosition(e.data.line, e.data.linePos)

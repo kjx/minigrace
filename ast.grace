@@ -754,7 +754,7 @@ class methodNode.new(name', signature', body', dtype') {
     }
     method decType {
         if (dtype == false) then {
-            return identifierNode.new("Dynamic", false)
+            return identifierNode.new("Unknown", false)
         }
         return dtype
     }
@@ -1243,6 +1243,7 @@ class identifierNode.new(name, dtype') {
     var wildcard := false
     var dtype := dtype'
     var inBind := false
+    var inRequest := false
     method accept(visitor : ASTVisitor) {
         if (visitor.visitIdentifier(self)) then {
             if (self.dtype != false) then {
@@ -1257,12 +1258,14 @@ class identifierNode.new(name, dtype') {
         blkAfter))
         n.wildcard := wildcard
         n.inBind := inBind
+        n.inRequest := inRequest
         n := blk.apply(n)
         n.line := line
         if (n.kind == "identifier") then {
             n.linePos := linePos
             n.wildcard := wildcard
             n.inBind := inBind
+            n.inRequest := inRequest
         }
         blkAfter.apply(n)
         n
@@ -1289,7 +1292,7 @@ class identifierNode.new(name, dtype') {
     }
     method decType {
         if (dtype == false) then {
-            return identifierNode.new("Dynamic", false)
+            return identifierNode.new("Unknown", false)
         }
         return dtype
     }
@@ -1585,7 +1588,7 @@ class defDecNode.new(name', val, dtype') {
     }
     method decType {
         if (dtype == false) then {
-            return identifierNode.new("Dynamic", false)
+            return identifierNode.new("Unknown", false)
         }
         return dtype
     }
@@ -1595,7 +1598,7 @@ class defDecNode.new(name', val, dtype') {
             spc := spc ++ "    "
         }
         var s := "def {self.name.toGrace(0)}"
-        if (self.dtype.value != "Dynamic") then {
+        if (self.dtype.value != "Unknown") then {
             s := s ++ " : " ++ self.dtype.toGrace(0)
         }
         if (self.annotations.size > 0) then {
@@ -1663,7 +1666,7 @@ class varDecNode.new(name', val', dtype') {
     }
     method decType {
         if (dtype == false) then {
-            return identifierNode.new("Dynamic", false)
+            return identifierNode.new("Unknown", false)
         }
         return dtype
     }
@@ -1673,7 +1676,7 @@ class varDecNode.new(name', val', dtype') {
             spc := spc ++ "    "
         }
         var s := "var {self.name.toGrace(0)}"
-        if (self.dtype.value != "Dynamic") then {
+        if (self.dtype.value != "Unknown") then {
             s := s ++ " : " ++ self.dtype.toGrace(0)
         }
         if (self.annotations.size > 0) then {

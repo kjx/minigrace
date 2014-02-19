@@ -46,6 +46,13 @@ GraceString.prototype = {
             var s = this._value;
             return new GraceString(s.substring(from._value - 1, to._value));
         },
+        "startsWith": function(argcv, needle) {
+            var s = this._value;
+            var n = needle._value;
+            if (s.substring(0, n.length) == n)
+                return new GraceBoolean(true);
+            return new GraceBoolean(false);
+        },
         "asString": function(argcv) { return this ; },
         "encode": function(argcv) { return this ; }, // TODO this is a hack
         "==": function(argcv, other) {
@@ -851,7 +858,8 @@ function classType(obj) {
     return t;
 }
 
-var var_Dynamic = new GraceType("Dynamic");
+var var_Unknown = new GraceType("Unknown");
+var var_Dynamic = var_Unknown;
 var var_Done = new GraceType("Done");
 var var_String = classType(new GraceString(""));
 var var_Number = classType(new GraceNum(1));
@@ -863,6 +871,7 @@ var_List.typeMethods = ["==", "!=", "push", "pop", "at", "at()put",
 var type_String = var_String;
 var type_Number = var_Number;
 var type_Boolean = var_Boolean;
+var type_Unknown = var_Unknown;
 var type_Dynamic = var_Dynamic;
 var type_List = var_List;
 var var_Block = new GraceType("Block");
@@ -1058,6 +1067,9 @@ function gracecode_io() {
     this.methods.realpath = function(junk, x) {
         return x;
     };
+    this.methods.findResource = function(junk, path) {
+        return path;
+    }
     this.definitionModule = "io";
     this.definitionLine = 0;
     return this;
@@ -1087,6 +1099,44 @@ function gracecode_sys() {
         return o;
     };
     this.definitionModule = "sys";
+    this.definitionLine = 0;
+    return this;
+}
+
+function gracecode_imports() {
+    var extensions = {
+        'txt': Grace_allocObject(),
+    };
+    extensions.txt.methods.loadResource = function(junk, path) {
+        var req = new XMLHttpRequest();
+        req.open('GET', 'https://' + path._value, false);
+        req.send(null);
+        if (req.status == 200) {
+            return new GraceString(req.responseText);
+        }
+        throw new GraceExceptionPacket(RuntimeErrorObject,
+                new GraceString("Error loading resource '" + path._value
+                    + "'."));
+    };
+    this.methods.registerExtension = function(junk, ext, handler) {
+        extensions[ext._value] = handler;
+    };
+    this.methods.loadResource = function(junk, importpath) {
+        path = importpath._value;
+        var slashPos = path.lastIndexOf('/');
+        var dotpos = path.indexOf('.', slashPos);
+        if (dotpos <= 0)
+            throw new GraceExceptionPacket(RuntimeErrorObject,
+                    new GraceString("No extension in path '" + path._value
+                        + "'."));
+        var ext = path.substr(dotpos + 1);
+        if (extensions[ext]) {
+            return callmethod(extensions[ext], "loadResource", [1], importpath);
+        }
+        throw new GraceExceptionPacket(RuntimeErrorObject,
+                new GraceString("No mapping for extension '" + ext + "'."));
+    };
+    this.definitionModule = "imports";
     this.definitionLine = 0;
     return this;
 }
@@ -1858,6 +1908,35 @@ Grace_prelude.methods["while()do"] = function(argcv, c, b) {
         throw new GraceExceptionPacket(TypeErrorObject,
             new GraceString("expected Block for argument condition (1) of "
                 + "while()do, got " + c.className));
+    if (Grace_prelude.methods["while()do"] &&
+            Grace_prelude.methods["while()do"].safe) {
+        var count = 0;
+        var runningTime = 0;
+        var runningCount = 0;
+        var startTime = new Date();
+        var diff;
+        while (Grace_isTrue(callmethod(c, "apply", [0]))) {
+            count++;
+            if (count % 100000 == 0 && ((diff=new Date()-startTime) > 5000)) {
+                var totTime = runningTime + diff;
+                var totIterations = runningCount + count;
+                if (confirm("A while loop is taking a long time to run. Do you want to stop the program? " + totIterations + " iterations of the loop have taken "
+                            + totTime + "ms so far."
+                            + "\n\nChoose OK to stop the loop or Cancel to "
+                            + "let it continue."))
+                    throw new GraceExceptionPacket(RuntimeErrorObject,
+                        new GraceString("user abort of possibly-infinite loop."));
+                else {
+                    runningCount += count;
+                    runningTime += diff;
+                    count = 0;
+                    startTime = new Date();
+                }
+            }
+            callmethod(b, "apply", [0]);
+        }
+        return var_nothing;
+    }
     while (Grace_isTrue(callmethod(c, "apply", [0]))) {
         callmethod(b, "apply", [0]);
     }

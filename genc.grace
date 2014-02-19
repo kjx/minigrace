@@ -28,6 +28,7 @@ var bblock := "entry"
 var linenum := 1
 var modules := collections.set.new
 var staticmodules := collections.set.new
+var dynamicmodules := collections.set.new
 def importnames = collections.map.new
 var values := []
 var outfile
@@ -684,7 +685,7 @@ method compilemethod(o, selfobj, pos) {
             slot := slot + 1
             numslots := numslots + 1
             if (param.dtype != false) then {
-                if ((param.dtype.value != "Dynamic")
+                if ((param.dtype.value != "Unknown")
                     && ((param.dtype.kind == "identifier")
                         || (param.dtype.kind == "type"))) then {
                     haveTypedParams := true
@@ -737,7 +738,7 @@ method compilemethod(o, selfobj, pos) {
         out("  \} else \{")
         for (o.generics) do {g->
             var gn := escapeident(g.value)
-            out("    *var_{gn} = Dynamic;")
+            out("    *var_{gn} = Unknown;")
         }
         out("  \}")
         out("// End generics")
@@ -1027,7 +1028,7 @@ method compilemethodtypes(litname, o) {
     for (o.signature) do { part ->
         for (part.params) do { p ->
             // We store information for static top-level types only:
-            // absent information is treated as Dynamic (and unchecked).
+            // absent information is treated as Unknown (and unchecked).
             if (false != p.dtype) then {
                 if ((p.dtype.kind == "identifier")
                     || (p.dtype.kind == "type")) then {
@@ -1137,10 +1138,10 @@ method compileidentifier(o) {
     var name := escapeident(o.value)
     if (name == "super") then {
         def sugg = errormessages.suggestion.new
-        sugg.replaceRange(o.linePos, o.linePos + 4)with "this" onLine(o.line)
+        sugg.replaceRange(o.linePos, o.linePos + 4)with "self" onLine(o.line)
         errormessages.syntaxError("'super' cannot be used except on the "
                 ++ "left-hand side of the . in a method request. "
-                ++ "Use 'this' instead.")
+                ++ "Use 'self' instead.")
             atRange(
                 o.line, o.linePos, o.linePos + 4)withSuggestion(sugg)
     }
@@ -1753,7 +1754,8 @@ method compilenode(o) {
 }
 method spawnSubprocess(id, cmd, data) {
     if (subprocesses.size < util.jobs) then {
-        return subprocesses.push([id, io.spawn("bash", "-c", cmd), data])
+        subprocesses.push([id, io.spawn("bash", "-c", cmd), data])
+        return subprocesses[subprocesses.size][2] 
     }
     var alive := 0
     var firstAlive := false
@@ -1770,31 +1772,36 @@ method spawnSubprocess(id, cmd, data) {
         firstAlive[2].wait
     }
     subprocesses.push([id, io.spawn("bash", "-c", cmd), data])
+    return subprocesses.at(subprocesses.size)[2]
 }
 method parseGCT(path, filepath) {
     xmodule.parseGCT(path,
         filepath.replace(".gcn")with(".gct").replace(".gso")with(".gct"))
 }
-method addTransitiveImports(filepath, epath) {
+method addTransitiveImports(filepath, epath, line) {
     def data = parseGCT(epath, filepath)
+    if (data.contains "dialect") then {
+        checkimport(data.get("dialect").first, line, true)
+    }
     if (data.contains("modules")) then {
         for (data.get("modules")) do {m->
             if (m == util.modname) then {
                 errormessages.syntaxError("Cyclic import detected: '{m}' is imported "
-                    ++ "by '{epath}', which is imported by '{m}' (and so on).")atLine(1)
+                    ++ "by '{epath}', which is imported by '{m}' (and so on).")atLine(line)
             }
-            checkimport(m)
+            checkimport(m, line, false)
         }
     }
     if (data.contains("path")) then {
         def path = data.get("path").first
         if (path != epath) then {
             errormessages.syntaxError("Imported module '{epath}' compiled with"
-                ++ " different path '{path}'.")atLine(1)
+                ++ " different path '{path}'.")atLine(line)
         }
     }
 }
-method checkimport(nm) {
+
+method checkimport(nm, line, isDialect) {
     var exists := false
     var ext := false
     var cmd
@@ -1811,69 +1818,59 @@ method checkimport(nm) {
             return true
         }
     }
-    if (io.exists("{sys.execPath}/{nm}.gso") &&
-        {!util.extensions.contains("Static")}) then {
-        exists := true
-        addTransitiveImports("{sys.execPath}/{nm}.gso", nm)
-    } elseif (io.exists(nm ++ ".gso") &&
-        {!util.extensions.contains("Static")}) then {
-        exists := true
-        addTransitiveImports("{nm}.gso", nm)
-    } elseif (io.exists(io.realpath(sys.execPath)
-        ++ "/../lib/minigrace/{nm}.gso") &&
-            {!util.extensions.contains("Static")}) then {
-        exists := true
-        addTransitiveImports(io.realpath(sys.execPath)
-            ++ "/../lib/minigrace/{nm}.gso", nm)
-    } elseif(nm == "StandardPrelude") then {
-        exists := true
-        staticmodules.add(nm)
-        addTransitiveImports(io.realpath(sys.execPath)
-            ++ "/StandardPrelude.gcn", nm)
-    } elseif (io.exists("{sys.execPath}/modules/{nm}.gcn")) then {
-        exists := true
-        linkfiles.push("{sys.execPath}/modules/{nm}.gcn")
-        staticmodules.add(nm)
-        addTransitiveImports("{sys.execPath}/modules/{nm}.gcn", nm)
-    } elseif (io.exists("{sys.execPath}/../lib/minigrace/modules/{nm}.gcn")) then {
-        exists := true
-        linkfiles.push("{sys.execPath}/../lib/minigrace/modules/{nm}.gcn")
-        staticmodules.add(nm)
-        addTransitiveImports("{sys.execPath}/../lib/minigrace/modules/{nm}.gcn", nm)
-    } elseif (io.exists("{sys.execPath}/{nm}.gcn") && {
-            !io.exists("{nm}.grace")
-        }) then {
-        // Find static modules like unicode alongside compiler,
-        // but not modules compiled from Grace code here.
-        exists := true
-        linkfiles.push("{sys.execPath}/{nm}.gcn")
-        staticmodules.add(nm)
-        addTransitiveImports("{sys.execPath}/{nm}.gcn", nm)
-    } elseif (io.exists("{sys.execPath}/../lib/minigrace/{nm}.gcn") && {
-            !io.exists("{nm}.grace")
-        }) then {
-        // Find static modules like unicode alongside compiler,
-        // but not modules compiled from Grace code here.
-        exists := true
-        linkfiles.push("{sys.execPath}/../lib/minigrace/{nm}.gcn")
-        addTransitiveImports("{sys.execPath}/../lib/minigrace/{nm}.gcn", nm)
-    } elseif (io.exists(nm ++ ".gcn").andAlso {!util.importDynamic}) then {
-        if (io.newer(nm ++ ".gcn", nm ++ ".grace")) then {
-            exists := true
-            linkfiles.push(nm ++ ".gcn")
-            addTransitiveImports(nm ++ ".gcn", nm)
-            staticmodules.add(nm)
-        }
+    var locationList := collections.list.new
+    locationList.push("")
+    locationList.push("{sys.execPath}/")
+    if(buildinfo.modulepath != "") then {
+        locationList.push("{buildinfo.modulepath}/")
     }
-    if (exists.not) then {
-        if (io.exists(nm ++ ".gc")) then {
-            ext := ".gc"
-        }
-        if (io.exists(nm ++ ".grace")) then {
-            ext := ".grace"
-        }
-        if (ext != false) then {
-            cmd := argv.first ++ " --target c --make " ++ nm ++ ext
+    var homePath := sys.environ["HOME"]
+    locationList.push("{homePath}/.local/lib/grace/modules/")
+    locationList.push("{sys.execPath}/../lib/minigrace/modules/")
+    
+    if(nm == "StandardPrelude") then {
+        staticmodules.add(nm)
+        addTransitiveImports(io.realpath(sys.execPath)++ "/StandardPrelude.gcn", nm, line)
+        return
+    }
+    for(locationList) do { location ->
+        if (exists.not && io.exists("{location}{nm}.gso").andAlso
+                {!util.extensions.contains("Static")}) then {
+            if (io.newer("{location}{nm}.gso", "{location}{nm}.grace")) then {
+                exists := true
+                dynamicmodules.add(nm)
+            }
+            addTransitiveImports("{location}{nm}.gso", nm, line)
+        } 
+        if (exists.not && io.exists("{location}{nm}.gcn")) then {
+            if((!util.importDynamic && 
+                        {io.newer("{location}{nm}.gcn", "{location}{nm}.grace")})
+                        || (!io.exists("{location}{nm}.grace"))) then{
+                //Find static modules where the .gcn is either newer
+                //or the same age as the corresponding .grace file
+                //i.e. whether we need to recompile again or not
+                exists := true
+                linkfiles.push("{location}{nm}.gcn")
+                staticmodules.add(nm)
+                addTransitiveImports("{location}{nm}.gcn", nm, line)
+            }
+        } 
+        if (exists.not && io.exists("{location}{nm}.grace")) then {
+            // Check for the .grace file first so that we know that
+            // when we look for .gcn the corresponding .grace won't exist.
+            exists := true
+            var slash := false
+            for(argv.first) do {letter ->
+                if(letter == "/") then {
+                    slash := true
+                }
+            }
+
+            if(slash) then {
+                cmd := "{argv.first} --target c --make \"{nm}.grace\""
+            }else{
+                cmd := "{sys.execPath}/{argv.first} --target c --make \"{nm}.grace\""
+            }
             cmd := cmd ++ " --gracelib \"{util.gracelibPath}\""
             if (util.verbosity > 30) then {
                 cmd := cmd ++ " --verbose"
@@ -1882,31 +1879,41 @@ method checkimport(nm) {
                 cmd := cmd ++ " --vtag " ++ util.vtag
             }
             cmd := cmd ++ " --noexec --no-recurse -XNoMain"
-            if (util.dynamicModule) then {
+            if (util.dynamicModule || isDialect) then {
                 cmd := cmd ++ " --dynamic-module"
             }
             if (util.importDynamic) then {
                 cmd := cmd ++ " --import-dynamic --dynamic-module"
             }
-            if (util.recurse) then {
-                spawnSubprocess(nm, cmd, [nm ++ ".gcn", nm])
+            if (util.recurse || isDialect) then {
+                if(location != "") then {
+                    cmd := "cd {location} && "++cmd
+                }
+                var process := spawnSubprocess(nm, cmd, [nm ++ ".gcn", nm, line])
+                if(isDialect) then {
+                    // We must wait for the .gso to be built before
+                    // we try to run loadDynamic on it. Block here.
+                    process.wait
+                    dynamicmodules.add(nm)
+                }
+                //addTransitiveImports("{location}{nm}.gso", nm, line)
             }
-            exists := true
-            if (!util.importDynamic) then {
-                linkfiles.push(nm ++ ".gcn")
+            if (!util.importDynamic && !isDialect) then {
+                linkfiles.push("{location}{nm}.gcn")
                 staticmodules.add(nm)
             }
-            ext := false
         }
     }
-    if ((nm == "sys") || (nm == "io")) then {
+    if ((nm == "sys") || (nm == "io") || (nm == "imports")) then {
         exists := true
         staticmodules.add(nm)
     }
     if (exists.not) then {
-        errormessages.syntaxError("Failed finding import of '{nm}'.")atLine(1)
+        errormessages.syntaxError("Failed finding import of '{nm}'.")
+            atLine(line)
     }
 }
+
 method processImports(values') {
     type LinePos = {
         line -> Number
@@ -1927,14 +1934,14 @@ method processImports(values') {
         for (values') do { v ->
             if (v.kind == "import") then {
                 var nm := v.path
-                checkimport(nm)
+                checkimport(nm, v.line, false)
             }
             if (v.kind == "dialect") then {
                 var nm := v.value
-                checkimport(nm)
+                checkimport(nm, v.line, true)
                 log_verbose("loading dialect for checkers.")
                 def CheckerFailure = Exception.refine "CheckerFailure"
-                catch {
+                try {
                     def dobj = mirrors.loadDynamicModule(nm)
                     def mths = mirrors.reflect(dobj).methods
                     for (mths) do { m->
@@ -1949,10 +1956,10 @@ method processImports(values') {
                             dialectHasAtModuleStart := true
                         }
                     }
-                } case { e : RuntimeError ->
+                } catch { e : RuntimeError ->
                     util.setPosition(v.line, 1)
                     errormessages.error("Dialect error: Dialect '{nm}' failed to load: {e}.")atLine(v.line)
-                } case { e : CheckerFailure ->
+                } catch { e : CheckerFailure ->
                     match (e.data)
                         case { lp : LinePos ->
                             util.setPosition(e.data.line, e.data.linePos)
@@ -1980,7 +1987,7 @@ method processImports(values') {
                 if (!p.success) then {
                     imperrors.push(nm)
                 } else {
-                    addTransitiveImports(pth[1], pth[2])
+                    addTransitiveImports(pth[1], pth[2], pth[3])
                 }
             }
         }
@@ -2025,6 +2032,7 @@ method compile(vl, of, mn, rm, bt) {
     outprint("extern Object Number;")
     outprint("extern Object Boolean;")
     outprint("extern Object Dynamic;")
+    outprint("extern Object Unknown;")
     outprint("extern Object List;")
     outprint("extern Object Block;")
     outprint("extern Object Done;")
@@ -2102,6 +2110,8 @@ method compile(vl, of, mn, rm, bt) {
     out("  type_Boolean = Boolean;")
     out("  Object *var_Dynamic = alloc_var();")
     out("  *var_Dynamic = Dynamic;")
+    out("  Object *var_Unknown = alloc_var();")
+    out("  *var_Unknown= Unknown;")
     out("  Object *var_List = alloc_var();")
     out("  *var_List = List;")
     out("  Object *var_Type = alloc_var();")
@@ -2174,6 +2184,9 @@ method compile(vl, of, mn, rm, bt) {
         util.runOnNew {
             out("  setCompilerModulePath(\"{io.realpath(sys.execPath)}\");")
         } else {}
+        if(buildinfo.modulepath != "") then {
+            out("  setModulePath(\"{buildinfo.modulepath}\");")
+        }
         out("  gracelib_argv(argv);")
         out("  Object params[1];")
         out("  undefined = alloc_Undefined();")
@@ -2202,7 +2215,9 @@ method compile(vl, of, mn, rm, bt) {
     if (runmode == "make") then {
         log_verbose("compiling C code.")
         outfile.close
-        cmd := "gcc -std=c99 -g -I\"{util.gracelibPath}\" -I\"{sys.execPath}/../include\" -I\"{sys.execPath}\" -o \"{modname}.gcn\" -c \"{modname}.c\""
+
+        cmd := "gcc -std=c99 -g -I\"{util.gracelibPath}\" -I\"{sys.execPath}/../include\" -I\"{sys.execPath}\" -I\"{buildinfo.includepath}\" -o \"{modname}.gcn\" -c \"{modname}.c\""
+        
         if ((io.system(cmd)).not) then {
             io.error.write("Fatal error: Failed C compilation of {modname}.\n")
             sys.exit(1)
@@ -2219,9 +2234,20 @@ method compile(vl, of, mn, rm, bt) {
             if (io.system(cmd)) then {
                 exportDynamicBit := "-Wl,--export-dynamic"
             }
-            cmd := "gcc -g -o \"{modname}\" -fPIC {exportDynamicBit} "
-                ++ "\"{modname}.gcn\" "
-                ++ "\"" ++ util.gracelibPath ++ "/gracelib.o\" "
+
+            if(io.exists("{util.gracelibPath}/gracelib.o")) then {
+                cmd := "gcc -g -o \"{modname}\" -fPIC {exportDynamicBit} "
+                    ++ "\"{modname}.gcn\" "
+                    ++ "\"" ++ util.gracelibPath ++ "/gracelib.o\" "
+            } elseif(buildinfo.includepath != "") then {
+                cmd := "gcc -g -o \"{modname}\" -fPIC {exportDynamicBit} "
+                    ++ "\"{modname}.gcn\" "
+                    ++ "\"{buildinfo.objectpath}/gracelib.o\" "
+            }else{
+                io.error.write("Try setting the include path before moving the executable")
+
+            }
+
             for (linkfiles) do { fn ->
                 cmd := cmd ++ " " ++ fn
             }
@@ -2248,7 +2274,7 @@ method compile(vl, of, mn, rm, bt) {
                     exportDynamicBit := "-Wl,-undefined -Wl,dynamic_lookup"
                 }
             }
-            cmd := "gcc -g -I\"{util.gracelibPath}\" -I\"{sys.execPath}/../include\" -I\"{sys.execPath}\" -shared -o \"{modname}.gso\" -fPIC {exportDynamicBit} "
+            cmd := "gcc -g -I\"{util.gracelibPath}\" -I\"{sys.execPath}/../include\" -I\"{sys.execPath}\" -I\"{buildinfo.includepath}\" -shared -o \"{modname}.gso\" -fPIC {exportDynamicBit} "
                 ++ "\"{modname}.c\" "
             if ((io.system(cmd)).not) then {
                 io.error.write("Failed producing dynamic module.")
@@ -2256,8 +2282,11 @@ method compile(vl, of, mn, rm, bt) {
             }
         }
         log_verbose("done.")
+        def allmodules = collections.set.new
+        allmodules.extend(staticmodules)
+        allmodules.extend(dynamicmodules)
         xmodule.writeGCT(modname, modname ++ ".gct")
-            fromValues(values)modules(staticmodules)
+            fromValues(values)modules(allmodules)
         if (buildtype == "run") then {
             if (modname[1] != "/") then {
                 cmd := "./" ++ modname

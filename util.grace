@@ -12,6 +12,7 @@ var modnamev := "stdin_minigrace"
 var runmodev := "make"
 var buildtypev := "run"
 var interactivev := false
+var hackv := false
 var gracelibPathv := false
 var linenumv := 1
 var lineposv := 1
@@ -89,6 +90,8 @@ method parseargs {
                         buildtypev := "native"
                     } case { "--interactive" ->
                         interactivev := true
+                    } case { "--hack" ->
+                        hackv := true
                     } case { "--noexec" ->
                         noexecv := true
                     } case { "--yesexec" ->
@@ -331,6 +334,9 @@ method buildtype {
 method interactive {
     interactivev
 }
+method hack {
+    hackv
+}
 method gracelibPath {
     gracelibPathv
 }
@@ -390,6 +396,7 @@ method printhelp {
     print "  --source         Compile FILE to source, but no further"
     print "  --dynamic-module Compile FILE as a dynamic module (experimental!)"
     print "  --interactive    Launch interactive read-eval-print interpreter"
+    print "  --hack           Hack mode"
     print ""
     print "Options:"
     print "  --verbose        Give more detailed output"

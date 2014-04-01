@@ -14,11 +14,12 @@ import "mgcollections" as mgcollections
 import "interactive" as interactive
 import "identifierresolution" as identifierresolution
 import "mirrors" as mirrors
+import "hackmode" as hack
 
 util.parseargs
 
 def targets = ["lex", "parse", "grace", "processed-ast",
-    "imports", "c", "js"]
+    "imports", "c", "js", "hack"]
 
 if (util.target == "help") then {
     print("Valid targets:")
@@ -27,6 +28,7 @@ if (util.target == "help") then {
     }
     sys.exit(0)
 }
+
 
 if (util.interactive) then {
     interactive.startRepl
@@ -130,6 +132,9 @@ match(util.target)
     }
     case { "json" ->
         genjson.generate(values, util.outfile)
+    }
+    case { "hack" ->
+        hack.hackmode(values)
     }
     case { _ ->
         io.error.write("minigrace: no such target '" ++ util.target ++ "'\n")
